@@ -23,12 +23,17 @@ if (-not (Test-Path $VenvPy)) { throw "找不到 venv 解释器: $VenvPy（先 n
 function Resolve-BackendDir {
     if ($BackendDir) { return (Resolve-Path -LiteralPath $BackendDir).Path }
     if ($env:OMNI_BACKEND_DIR) { return $env:OMNI_BACKEND_DIR }
-    # submodule 布局：<omni-link>/vendor/omni-cli -> <omni-link>/python
-    $sub = Join-Path (Split-Path -Parent (Split-Path -Parent $RepoRoot)) "python"
+    # submodule 布局：<omni-link>/vendor/omni-cli -> <omni-link>/vendor/omni-backend/link
+    $sub = Join-Path (Split-Path -Parent (Split-Path -Parent $RepoRoot)) "vendor\omni-backend\link"
     if (Test-Path -LiteralPath (Join-Path $sub "server.py")) { return $sub }
-    # 同级仓库布局
-    $sibling = Join-Path (Split-Path -Parent $RepoRoot) "omni-link\python"
-    if (Test-Path -LiteralPath (Join-Path $sibling "server.py")) { return $sibling }
+    # 同级仓库布局：<workspace>/omni-cli 与 <workspace>/omni-backend 平级
+    foreach ($sibling in @(
+        (Join-Path (Split-Path -Parent $RepoRoot) "omni-backend\link"),
+        (Join-Path (Split-Path -Parent $RepoRoot) "omni-link\vendor\omni-backend\link"),
+        (Join-Path (Split-Path -Parent $RepoRoot) "omni-link\python")
+    )) {
+        if (Test-Path -LiteralPath (Join-Path $sibling "server.py")) { return $sibling }
+    }
     return ""
 }
 

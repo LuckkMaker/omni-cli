@@ -7,10 +7,19 @@
 import argparse
 
 
-def common_parser() -> argparse.ArgumentParser:
+def common_parser(include_service: bool = True) -> argparse.ArgumentParser:
+    """叶子命令的共用全局选项。
+
+    ``include_service=False`` 供 ``backend`` 子命令使用：它已经有位置参数
+    ``SERVICE``，再挂 ``--service`` 会出现两个同名语义的选项。
+    """
+
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--backend-port", type=int, default=None, metavar="PORT",
                    help="后端端口（优先于常驻/配置文件）")
+    if include_service:
+        p.add_argument("--service", choices=("link", "bus"), default=None, metavar="SERVICE",
+                       help="后端服务（link|bus）；默认按命令组推断（serial/net/modbus/usb 走 bus，其余走 link）")
     p.add_argument("--managed", action="store_true", default=False,
                    help="临时拉起托管后端执行完关停（无需先 backend start）")
     p.add_argument("--json", dest="json_", action="store_true", default=False,

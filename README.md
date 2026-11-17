@@ -272,8 +272,9 @@ omni (本包)
 powershell -File scripts\cli-package.ps1
 ```
 
-该脚本会：`uv build --wheel` → `uv pip install` 到仓库 `.venv` → 记录 omni-link 后端目录 → 验证 `omni --version`。
-后端目录按以下顺序自动探测：`-BackendDir` 参数 → `OMNI_BACKEND_DIR` → submodule 布局（`<omni-link>/vendor/omni-cli`）→ 同级 `omni-link\python`。
+该脚本会：`uv build --wheel` → `uv pip install` 到仓库 `.venv` → 记录 link 后端目录 → 验证 `omni --version`。
+后端目录按以下顺序自动探测：`-BackendDir` 参数 → `OMNI_BACKEND_DIR` → submodule 布局
+（`<omni-link>/vendor/omni-backend/link`）→ 同级 `omni-backend/link` → 旧布局 `omni-link\python`。
 
 安装后 `omni` 位于 `.venv\Scripts\omni.exe`，激活 venv 后可直接使用：
 
@@ -380,7 +381,8 @@ omni backend stop
 | **托管** | 任意命令加 `--managed` | 单条命令即用即走，执行完自动关停后端 |
 | **附加** | `--backend-port 57123` | 后端已由前端/手动启动，直接接管 |
 
-端口查找顺序：`--backend-port` → 常驻运行时记录 → `backend.config.json` → `OMNI_BACKEND_PORT`。
+端口查找顺序：`--backend-port` → 共享登记表（`backend.json`）→ 常驻运行时记录 → `backend.config.json`
+→ `OMNI_BACKEND_PORT`（bus 服务对应 `OMNI_BUS_BACKEND_PORT`）。
 
 ## 全局选项
 
@@ -411,24 +413,41 @@ omni backend stop
 
 ## 命令参考
 
-### `backend` — 后端生命周期
+### `backend` — 后端生命周期（link / bus 两个服务）
+
+OMNI 平台有两个独立后端服务，各自是独立进程、独立登记表：
+
+| 服务 | 用途 | 登记表 | 状态目录环境变量 |
+| --- | --- | --- | --- |
+| `link` | 探针 / 烧录 / RTT / 调试 | `%LOCALAPPDATA%\omni-link\backend.json` | `OMNI_STATE_DIR` |
+| `bus` | 串口 / 网络 / Modbus / USB | `%LOCALAPPDATA%\omni-bus\backend.json` | `OMNI_BUS_STATE_DIR` |
 
 | 子命令 | 说明 |
 | --- | --- |
-| `start` | 启动常驻后端 daemon（自动分配端口，pid/port 记入运行时文件） |
-| `stop` | 停止后端：先走 HTTP 优雅关停；若后端僵死（事件循环被探针操作阻塞）则按端口定位进程树强杀，并等进程真正退出 |
-| `status` | 查询运行状态（退出码 0=运行中，1=未运行；端口在监听但 HTTP 无响应会标为「僵死」） |
+| `start [link\|bus]` | 启动常驻后端 daemon（默认 `link`；已有可达后端则复用，不重复启动） |
+| `stop [link\|bus]` | 停止后端：先走 HTTP 优雅关停；若后端僵死（事件循环被探针操作阻塞）则按端口定位进程树强杀，并等进程真正退出 |
+| `status [link\|bus]` | 查询运行状态（退出码 0=运行中，1=未运行；不带服务名时同时输出另一个服务的汇总） |
+| `list` | 横向列出所有服务的运行状态（`--json` 给出 `services` 数组） |
 
 ```powershell
-omni backend start
-omni backend status
+omni backend start              # link
+omni backend start bus          # bus
+omni backend status             # 两个服务各一行
 omni backend status --quiet; echo $LASTEXITCODE   # 仅看退出码，适合脚本
-omni backend stop
+omni backend list --json
+omni backend stop bus
 ```
 
 `stop` 不依赖运行时记录：即使后端由手动 `python server.py` 或 Electron 主进程拉起，
 也能按端口找到并停止，确保 J-Link 等探针句柄被释放。若优雅关停的清理被探针操作卡住，
-后端自身的关停看门狗（`api/system.py` `SHUTDOWN_GRACE_S=10s`）会兜底强制退出。
+后端自身的关停看门狗（后端仓库 `common/omni_service.py`，宽限 10s）会兜底强制退出。
+
+`--service link|bus` 可覆盖单条命令连哪个后端：默认按命令组推断——`serial` / `net` /
+`modbus` / `usb` 走 `bus`，其余走 `link`。`* status` 这类只查询的命令不接受 `--managed`
+（临时后端没有会话，查到的永远是空状态）。
+
+启动失败时会打印后端 stderr 末尾（例如缺 `pymodbus`），并提示安装对应 GUI 或设置
+`OMNI_BUS_STATE_DIR`；装了 GUI 的机器会自动复用其 `resources/python/` 里的后端。
 
 ### `system` — 系统信息
 
@@ -1139,7 +1158,8 @@ powershell -File scripts\cli-smoke.ps1 -UseInstalled -Rtt
 `cli-smoke.ps1` 还会检查帮助输出无 U+FFFD、缺少 `--target` 的 `probe connect` 立即失败，任一检查不通过时脚本以非 0 退出。
 
 `tests/` 里有一部分"契约测试"直接断言 omni-link 后端的内部实现（RTT 环形缓存、flash payload、pack 管理）。
-它们按以下顺序寻找后端源码：`OMNI_LINK_PYTHON` → submodule 布局 → 同级 `omni-link\python`；都找不到时打印
+它们按以下顺序寻找后端源码：`OMNI_LINK_PYTHON` → submodule 布局 → 同级 `omni-backend/link`
+（或 `omni-link/vendor/omni-backend/link`）→ 旧布局 `omni-link\python`；都找不到时打印
 `SKIP` 而不是失败，因此 CI 不需要拉 omni-link。
 
 ## 常见问题

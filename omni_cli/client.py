@@ -209,56 +209,84 @@ def pid_alive(pid: int) -> bool:
 
 # ── 后端进程管理 ────────────────────────────────────────────
 
-def _backend_command() -> list[str]:
+def _backend_command(service_name: str = settings.DEFAULT_SERVICE) -> list[str]:
     """构造启动后端的命令：
 
-    - 打包态：使用与 CLI 同目录的 omni-backend.exe。
-    - 源码态：用当前解释器运行 server.py，保证改动即时生效。
-    与 Electron 主进程约定一致：传 --port 0（自动分配），读 stdout 首行
-    {"port": N} 即就绪。
+    - 打包态：使用与 CLI 同目录的 ``<service exe>``。
+    - 源码态：用当前解释器运行该服务的 ``server.py``，保证改动即时生效。
+    与 Electron 主进程约定一致：传 ``--port 0``（自动分配），读 stdout 首行
+    ``{"port": N}`` 即就绪。
     """
-    explicit = os.environ.get("OMNI_BACKEND_EXE")
+    svc = settings.service(service_name)
+
+    # 显式覆盖：OMNI_BACKEND_EXE（link）/ OMNI_BUS_BACKEND_EXE（bus）
+    exe_var = "OMNI_BACKEND_EXE" if svc.name == settings.SERVICE_LINK else f"OMNI_{svc.name.upper()}_BACKEND_EXE"
+    explicit = os.environ.get(exe_var)
     if explicit and os.path.exists(explicit):
         return [explicit, "--port", "0"]
 
-    if getattr(sys, "frozen", False):
-        exes = _candidate_backend_exes()
-    else:
-        # 源码态优先 server.py，避免误用 dist/ 里的旧 exe
-        exes = _candidate_backend_exes()
-        if os.path.exists(settings.BACKEND_SERVER_PY):
-            return [sys.executable, settings.BACKEND_SERVER_PY, "--port", "0"]
+    server_py = settings.backend_server_py(svc.name)
+    exes = _candidate_backend_exes(svc.name)
+
+    # 源码态优先 server.py，避免误用 dist/ 里的旧 exe
+    if not getattr(sys, "frozen", False) and os.path.exists(server_py):
+        return [sys.executable, server_py, "--port", "0"]
 
     for exe in exes:
         if os.path.exists(exe):
             return [exe, "--port", "0"]
 
+    # 源码态下 server.py 不存在但打包产物在（常见于只装了 GUI 的机器）
     raise ApiError(
         0,
-        f"未找到后端 server.py: {settings.BACKEND_SERVER_PY}\n"
-        "  wheel 安装的 CLI 请设置 OMNI_BACKEND_DIR 指向后端目录，"
-        "或先手动启动后端并用 --backend-port 指定端口。",
+        f"未找到 {svc.name} 后端（server.py: {server_py}）\n"
+        f"  安装 OMNI {'Link' if svc.name == settings.SERVICE_LINK else 'Bus'} 后会自动复用其内置后端；"
+        f"也可以设置 {svc.state_env} 指向后端状态目录，或先手动启动后端并用 --backend-port 指定端口。",
         kind="error",
     )
 
 
-def _candidate_backend_exes() -> list[str]:
+def _candidate_backend_exes(service_name: str = settings.DEFAULT_SERVICE) -> list[str]:
     """收集可能的打包后端可执行文件路径：
 
-    1. 安装态：CLI（resources/python/omni.exe）与后端
-       （resources/python/omni-backend.exe）同目录。
-    2. 构建态：python/dist/omni-backend/omni-backend.exe（onedir）。
+    1. 安装态：CLI（resources/python/omni.exe）与后端同目录。
+    2. 已安装 GUI：``%LOCALAPPDATA%/Programs/omni-link/resources/python`` 等。
+    3. 构建态：``<omni-backend>/dist/<service>/<exe>/<exe>.exe``（onedir）。
     """
+    svc = settings.service(service_name)
+    exe_name = svc.exe_name + (".exe" if os.name == "nt" else "")
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-    return [
-        os.path.join(exe_dir, "omni-backend.exe"),
-        os.path.join(settings.BACKEND_DIR, "dist", "omni-backend", "omni-backend.exe"),
-    ]
+    candidates = [os.path.join(exe_dir, exe_name)]
+
+    from . import autoinstall  # 局部导入避免循环依赖
+
+    installed = autoinstall.find_installed_exe(svc.name)
+    if installed:
+        candidates.append(installed)
+
+    backend = settings.backend_dir(svc.name)
+    candidates.append(os.path.join(backend, "dist", svc.backend_subdir, svc.exe_name, exe_name))
+    candidates.append(os.path.join(os.path.dirname(backend), "dist", svc.backend_subdir, svc.exe_name, exe_name))
+    return candidates
 
 
-def _open_log() -> object:
-    os.makedirs(settings.LOG_FILE and os.path.dirname(settings.LOG_FILE) or ".", exist_ok=True)
-    return open(settings.LOG_FILE, "a", encoding="utf-8")
+def _log_tail(log_file: str, lines: int = 15) -> str:
+    """后端 stderr 末尾若干行（启动失败时给出真正原因，而不是只说"超时"）。"""
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            data = f.readlines()
+    except OSError:
+        return ""
+    tail = "".join(data[-lines:]).strip()
+    if not tail:
+        return ""
+    return "\n  --- 后端日志末尾 ---\n  " + tail.replace("\n", "\n  ")
+
+
+def _open_log(service_name: str = settings.DEFAULT_SERVICE) -> object:
+    log_file = settings.service(service_name).log_file()
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+    return open(log_file, "a", encoding="utf-8")
 
 
 def _read_handshake_line(stream, deadline: float) -> int:
@@ -298,11 +326,11 @@ def _wait_reachable(port: int, deadline: float) -> bool:
     return False
 
 
-def start_managed(timeout: int = 30) -> tuple[subprocess.Popen, int]:
+def start_managed(timeout: int = 30, service_name: str = settings.DEFAULT_SERVICE) -> tuple[subprocess.Popen, int]:
     """临时托管模式：启动后端，读握手，返回 (进程, 端口)。调用方负责 terminate。"""
-    logf = _open_log()
+    logf = _open_log(service_name)
     proc = subprocess.Popen(
-        _backend_command(),
+        _backend_command(service_name),
         stdout=subprocess.PIPE,
         stderr=logf,
         text=True,
@@ -319,7 +347,12 @@ def start_managed(timeout: int = 30) -> tuple[subprocess.Popen, int]:
         proc.stdout.close()
     if port is None:
         proc.kill()
-        raise ApiError(0, "后端启动超时或握手失败（未从 stdout 收到端口 JSON）", kind="error")
+        raise ApiError(
+            0,
+            "后端启动超时或握手失败（未从 stdout 收到端口 JSON）"
+            + _log_tail(settings.service(service_name).log_file()),
+            kind="error",
+        )
     # 端口 JSON 在 uvicorn 绑定 socket 之前就已打印，需等到真正可连才返回
     if not _wait_reachable(port, deadline):
         proc.kill()
@@ -327,18 +360,21 @@ def start_managed(timeout: int = 30) -> tuple[subprocess.Popen, int]:
     return proc, port
 
 
-def start_persistent(timeout: int = 30) -> dict:
+def start_persistent(timeout: int = 30, service_name: str = settings.DEFAULT_SERVICE) -> dict:
     """启动常驻后端 daemon。
 
     Windows 下子进程不会随父进程退出而被回收；用分离标志 + stdout 重定向到文件，
     轮询握手文件解析端口，写 pid/port 到运行时文件。返回 {pid, port}。
     """
-    logf = _open_log()
-    handshake = open(settings.HANDSHAKE_FILE, "w", encoding="utf-8")
+    svc = settings.service(service_name)
+    handshake_file = svc.handshake_file()
+    os.makedirs(os.path.dirname(handshake_file) or ".", exist_ok=True)
+    logf = _open_log(service_name)
+    handshake = open(handshake_file, "w", encoding="utf-8")
     flags = 0
     flags |= getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.Popen(
-        _backend_command(),
+        _backend_command(service_name),
         stdout=handshake,
         stderr=logf,
         text=True,
@@ -350,7 +386,7 @@ def start_persistent(timeout: int = 30) -> dict:
     port = None
     while time.time() < deadline:
         try:
-            with open(settings.HANDSHAKE_FILE, "r", encoding="utf-8") as f:
+            with open(handshake_file, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith("{"):
@@ -371,11 +407,21 @@ def start_persistent(timeout: int = 30) -> dict:
 
     if port is None:
         proc.kill()
-        raise ApiError(0, "后端常驻进程启动失败或超时", kind="error")
+        raise ApiError(
+            0,
+            f"后端（{svc.name}）常驻进程启动失败或超时"
+            + _log_tail(svc.log_file()),
+            kind="error",
+        )
     if not _wait_reachable(port, deadline):
         proc.kill()
-        raise ApiError(0, "后端常驻进程端口未在期限内就绪", kind="error")
-    settings.write_runtime({"pid": proc.pid, "port": port, "managed": False})
+        raise ApiError(
+            0,
+            f"后端（{svc.name}）端口未在期限内就绪" + _log_tail(svc.log_file()),
+            kind="error",
+        )
+    settings.write_runtime({"pid": proc.pid, "port": port, "managed": False, "service": svc.name},
+                           svc.name)
     return {"pid": proc.pid, "port": port}
 
 

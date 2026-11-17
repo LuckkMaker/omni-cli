@@ -1,15 +1,16 @@
-"""测试支撑：仓根路径与 omni-link 后端可用性。
+"""测试支撑：仓根路径与 link 后端可用性。
 
 CLI 有一部分"契约测试"直接断言后端内部实现（RTT 环形缓存、flash payload、
-pack 管理、session recorder）。这些用例只有在能定位到 omni-link 后端源码时
-才有意义：
+pack 管理、session recorder）。这些用例只有在能定位到后端源码时才有意义。
+后端已迁到独立仓库 ``omni-backend``（服务在 ``link/``），可能的布局：
 
-- 本仓库作为 omni-link 的 submodule 时位于 ``<omni-link>/vendor/omni-cli/``
-- 两个仓库平级时位于 ``<workspace>/omni-cli/``、``<workspace>/omni-link/``
-- 历史上曾内嵌在 ``<omni-link>/python/omni_cli/``
+- 本仓库作为 omni-link 的 submodule：``<omni-link>/vendor/omni-cli/``
+  → ``<omni-link>/vendor/omni-backend/link``
+- 两个仓库平级：``<workspace>/omni-cli/`` → ``<workspace>/omni-backend/link``
+- 旧布局（迁移前）：``<omni-link>/python``
 
-解析顺序：环境变量 ``OMNI_LINK_PYTHON`` → submodule 布局 → 同级目录 → 旧内嵌布局。
-找不到后端时，相关用例打印 SKIP 而不是失败（CI 里不拉 omni-link）。
+解析顺序：环境变量 ``OMNI_LINK_PYTHON`` → submodule 布局 → 同级仓库 → 旧内嵌布局。
+找不到后端时，相关用例打印 SKIP 而不是失败（CI 里不拉后端仓库）。
 """
 
 from __future__ import annotations
@@ -27,11 +28,14 @@ def _candidate_dirs() -> list[Path]:
     env = os.environ.get("OMNI_LINK_PYTHON")
     if env:
         candidates.append(Path(env).expanduser())
-    # submodule 布局：<omni-link>/vendor/omni-cli/tests -> <omni-link>/python
+    # submodule 布局：<omni-link>/vendor/omni-cli/tests -> <omni-link>/vendor/omni-backend/link
     if len(REPO_ROOT.parents) >= 2:
+        candidates.append(REPO_ROOT.parents[1] / "vendor" / "omni-backend" / "link")
+        # 旧布局：后端曾在应用仓库的 python/ 下
         candidates.append(REPO_ROOT.parents[1] / "python")
-    # 同级仓库布局
-    candidates.append(REPO_ROOT.parent / "omni-link" / "python")
+    # 同级仓库布局（omni-cli 与 omni-backend 平级）
+    candidates.append(REPO_ROOT.parent / "omni-backend" / "link")
+    candidates.append(REPO_ROOT.parent / "omni-link" / "vendor" / "omni-backend" / "link")
     # 旧内嵌布局（防御性保留）
     candidates.append(REPO_ROOT.parent / "python")
     return candidates

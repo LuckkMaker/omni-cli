@@ -1,6 +1,13 @@
 """叶子命令运行时：后端连接解析、统一输出与退出码。
 
 独立于 cli.py，避免命令模块与分发器循环导入。
+
+多服务要点：
+
+- **命令组 → 服务**：总线类命令组（serial / net / modbus / usb）走 ``bus``，
+  其余走 ``link``；叶子命令可用 ``--service link|bus`` 覆盖。
+- **状态型命令拒绝 --managed**：``* status`` 这类只查询的命令如果用临时托管后端，
+  查到的永远是空状态（临时后端没有会话），因此直接拒绝并提示先 ``backend start``。
 """
 
 import json
@@ -8,6 +15,47 @@ import sys
 
 from . import client, settings
 from .formatting import ctx_error
+
+#: 命令组 → 后端服务。未列出的命令组默认走 link。
+COMMAND_SERVICE = {
+    "serial": settings.SERVICE_BUS,
+    "net": settings.SERVICE_BUS,
+    "network": settings.SERVICE_BUS,
+    "modbus": settings.SERVICE_BUS,
+    "usb": settings.SERVICE_BUS,
+}
+
+
+def service_for(args) -> str:
+    """解析一条命令应该连哪个后端服务。
+
+    优先级：``--service`` 显式覆盖 > 命令组映射 > 默认 link。
+    """
+    explicit = getattr(args, "service", None)
+    if explicit:
+        return settings.service(explicit).name
+    return COMMAND_SERVICE.get(getattr(args, "command", None), settings.DEFAULT_SERVICE)
+
+
+def leaf_subcommand(args) -> str:
+    """取叶子子命令名（各模块的 subparser 都叫 ``*_sub``）。"""
+    for key, value in vars(args).items():
+        if key.endswith("_sub") and isinstance(value, str):
+            return value
+    return ""
+
+
+def reject_managed(args) -> str | None:
+    """状态型命令（``* status``）不允许 ``--managed``，返回错误文案或 None。"""
+    if not getattr(args, "managed", False):
+        return None
+    if leaf_subcommand(args) == "status":
+        svc = service_for(args)
+        return (
+            "状态查询命令不支持 --managed：临时托管后端没有会话，查到的永远是空状态。\n"
+            f"  请先执行 `omni backend start {svc}` 启动常驻后端再查询。"
+        )
+    return None
 
 
 def _warn_protocol(info: dict) -> None:
@@ -25,17 +73,21 @@ def run_command(handler):
     """包装叶子命令：建立后端客户端并执行，托管模式结束自动关停。"""
 
     def _run(args):
-        c, cleanup, hung_ports = _resolve(args)
+        problem = reject_managed(args)
+        if problem:
+            return ctx_error(problem)
+        svc = service_for(args)
+        c, cleanup, hung_ports = _resolve(args, svc)
         if c is None:
             if hung_ports:
                 ports = ", ".join(str(p) for p in hung_ports)
                 return ctx_error(
-                    f"后端在端口 {ports} 上有监听但 HTTP 无响应（进程可能已僵死，"
-                    "或正被挂起的硬件操作阻塞）。\n"
-                    "  请执行 `omni backend stop` 停止后重新 `omni backend start`。"
+                    f"后端（服务={svc}）在端口 {ports} 上有监听但 HTTP 无响应"
+                    "（进程可能已僵死，或正被挂起的硬件操作阻塞）。\n"
+                    f"  请执行 `omni backend stop {svc}` 停止后重新 `omni backend start {svc}`。"
                 )
             return ctx_error(
-                "未找到正在运行的后端。请先执行 `omni backend start` 启动常驻后端，"
+                f"未找到正在运行的后端（服务={svc}）。请先执行 `omni backend start {svc}` 启动常驻后端，"
                 "或加 --managed 由本命令临时拉起。"
             )
         try:
@@ -47,7 +99,7 @@ def run_command(handler):
     return _run
 
 
-def _resolve(args):
+def _resolve(args, service_name: str = settings.DEFAULT_SERVICE):
     """返回 (client, cleanup, hung_ports)。
 
     - managed：临时拉起；
@@ -56,13 +108,13 @@ def _resolve(args):
       交给调用方给出可执行的提示，而不是误报“后端未启动”。
     """
     if args.managed:
-        proc, port = client.start_managed(args.timeout)
+        proc, port = client.start_managed(args.timeout, service_name)
         return client.ApiClient(port, args.timeout), lambda: client.stop(proc.pid), []
 
     ports = []
     if args.backend_port:
         ports.append(args.backend_port)
-    ports += settings.candidate_ports()
+    ports += settings.candidate_ports(service_name)
 
     hung: list[int] = []
     for p in ports:

@@ -13,7 +13,7 @@ param(
     [int]$Port        = 57123,
     [switch]$Rtt,                    # 追加 RTT 上行读取段
     [switch]$UseInstalled,           # true=用已安装的 omni；false=用源码 python -m omni_cli
-    [string]$BackendDir = ""         # omni-link 的 python/ 目录；默认自动探测
+    [string]$BackendDir = ""         # 后端服务目录（omni-backend/link）；默认自动探测
 )
 
 $ErrorActionPreference = "Continue"
@@ -24,15 +24,22 @@ $RepoRoot  = Split-Path -Parent $ScriptDir
 function Resolve-BackendDir {
     if ($BackendDir) { return (Resolve-Path -LiteralPath $BackendDir).Path }
     if ($env:OMNI_BACKEND_DIR) { return $env:OMNI_BACKEND_DIR }
-    $sub = Join-Path (Split-Path -Parent (Split-Path -Parent $RepoRoot)) "python"
+    # submodule 布局：<omni-link>/vendor/omni-cli -> <omni-link>/vendor/omni-backend/link
+    $sub = Join-Path (Split-Path -Parent (Split-Path -Parent $RepoRoot)) "vendor\omni-backend\link"
     if (Test-Path -LiteralPath (Join-Path $sub "server.py")) { return $sub }
-    $sibling = Join-Path (Split-Path -Parent $RepoRoot) "omni-link\python"
-    if (Test-Path -LiteralPath (Join-Path $sibling "server.py")) { return $sibling }
+    # 同级仓库布局：<workspace>/omni-cli 与 <workspace>/omni-backend 平级
+    foreach ($sibling in @(
+        (Join-Path (Split-Path -Parent $RepoRoot) "omni-backend\link"),
+        (Join-Path (Split-Path -Parent $RepoRoot) "omni-link\vendor\omni-backend\link"),
+        (Join-Path (Split-Path -Parent $RepoRoot) "omni-link\python")
+    )) {
+        if (Test-Path -LiteralPath (Join-Path $sibling "server.py")) { return $sibling }
+    }
     return ""
 }
 
 $cwd = Resolve-BackendDir
-if (-not $cwd) { throw "找不到 omni-link 后端目录；请用 -BackendDir 或设置 OMNI_BACKEND_DIR" }
+if (-not $cwd) { throw "找不到 link 后端目录（omni-backend/link）；请用 -BackendDir 或设置 OMNI_BACKEND_DIR" }
 $py = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $py)) {
     $cmd = Get-Command python -ErrorAction SilentlyContinue
