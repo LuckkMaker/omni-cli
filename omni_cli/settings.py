@@ -96,7 +96,7 @@ _SERVICES: dict[str, ServiceInfo] = {
         state_env="OMNI_STATE_DIR",
         default_dir="omni-link",
         backend_subdir="link",
-        exe_name="omni-backend",
+        exe_name="omni-link-backend",
         dev_port=9001,
     ),
     SERVICE_BUS: ServiceInfo(

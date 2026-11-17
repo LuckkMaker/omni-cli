@@ -3,7 +3,7 @@
 CLI 常常单独安装（wheel / portable zip），此时仓库布局探测必然失败；但只要用户装过
 GUI，安装包里的后端就能直接复用。安装包布局（electron-builder `extraResources`）：
 
-    <安装目录>/resources/python/omni-backend.exe      # link 服务
+    <安装目录>/resources/python/omni-link-backend.exe # link 服务
     <安装目录>/resources/python/omni-bus-backend.exe  # bus 服务（阶段 3 之后）
     <安装目录>/resources/python/omni.exe              # CLI 自身
 
