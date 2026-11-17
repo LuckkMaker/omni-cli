@@ -1,4 +1,4 @@
-﻿# OMNI CLI 冒烟 / 集成测试
+# OMNI CLI 冒烟 / 集成测试
 # 用法：
 #   .\cli-smoke.ps1                      # 只测只读/离线子集（安全）
 #   .\cli-smoke.ps1 -Firmware .\app.hex  # 追加破坏性 program/erase 回环（需确认板子可擦除）
@@ -12,12 +12,35 @@ param(
     [string]$Uid      = "",
     [int]$Port        = 57123,
     [switch]$Rtt,                    # 追加 RTT 上行读取段
-    [switch]$UseInstalled            # true=用已安装的 omni；false=用源码 python -m omni_cli
+    [switch]$UseInstalled,           # true=用已安装的 omni；false=用源码 python -m omni_cli
+    [string]$BackendDir = ""         # omni-link 的 python/ 目录；默认自动探测
 )
 
 $ErrorActionPreference = "Continue"
-$py  = "D:\workspace\embedded\omni-link\.venv\Scripts\python.exe"
-$cwd = "D:\workspace\embedded\omni-link\python"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot  = Split-Path -Parent $ScriptDir
+
+function Resolve-BackendDir {
+    if ($BackendDir) { return (Resolve-Path -LiteralPath $BackendDir).Path }
+    if ($env:OMNI_BACKEND_DIR) { return $env:OMNI_BACKEND_DIR }
+    $sub = Join-Path (Split-Path -Parent (Split-Path -Parent $RepoRoot)) "python"
+    if (Test-Path -LiteralPath (Join-Path $sub "server.py")) { return $sub }
+    $sibling = Join-Path (Split-Path -Parent $RepoRoot) "omni-link\python"
+    if (Test-Path -LiteralPath (Join-Path $sibling "server.py")) { return $sibling }
+    return ""
+}
+
+$cwd = Resolve-BackendDir
+if (-not $cwd) { throw "找不到 omni-link 后端目录；请用 -BackendDir 或设置 OMNI_BACKEND_DIR" }
+$py = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $py)) {
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $cmd) { throw "找不到 Python；请创建 .venv" }
+    $py = $cmd.Source
+}
+# 源码态（python -m omni_cli）需要包在 PYTHONPATH 上：仓库已不再是 omni-link 的内嵌目录。
+$env:PYTHONPATH = $RepoRoot
 
 # 本轮“预期失败/编码”检查的失败计数（脚本末尾汇总并影响退出码）
 $script:encodingFailures = 0
@@ -25,7 +48,7 @@ $script:expectFailures = 0
 
 # CLI 调用方式：安装态直接用 omni.exe，开发态用 python -m omni_cli
 if ($UseInstalled) {
-    $cliExe = "D:\workspace\embedded\omni-link\.venv\Scripts\omni.exe"
+    $cliExe = Join-Path $RepoRoot ".venv\Scripts\omni.exe"
     $cliPrefix = @()
     Write-Host "使用已安装的 omni.exe" -ForegroundColor Magenta
 } else {

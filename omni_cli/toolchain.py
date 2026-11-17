@@ -63,9 +63,11 @@ def _install_root() -> str:
         return os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(sys.executable)))
         )
-    from .settings import PROJECT_ROOT
+    # 独立仓库后不再假定"包目录上两级就是应用安装目录"：显式覆盖优先，
+    # 否则退回本仓库根（<repo>/tools 存在时才生效，见 tool_roots）。
+    from .settings import REPO_ROOT
 
-    return PROJECT_ROOT
+    return os.environ.get("OMNI_APP_DIR") or REPO_ROOT
 
 
 def shared_root() -> str:

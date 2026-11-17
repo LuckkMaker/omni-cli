@@ -4,9 +4,21 @@
 """
 
 import json
+import sys
 
 from . import client, settings
 from .formatting import ctx_error
+
+
+def _warn_protocol(info: dict) -> None:
+    """后端协议比本 CLI 新时提示一次（不阻断，兼容窗口内仍可用）。"""
+    proto = info.get("protocol")
+    if isinstance(proto, int) and proto > client.BACKEND_PROTOCOL:
+        print(
+            f"警告: 后端协议 {proto} 高于本 CLI 支持的最高版本 {client.BACKEND_PROTOCOL}，"
+            "部分命令可能不可用；建议升级 OMNI CLI。",
+            file=sys.stderr,
+        )
 
 
 def run_command(handler):
@@ -54,7 +66,9 @@ def _resolve(args):
 
     hung: list[int] = []
     for p in ports:
-        if client.reachable(p):
+        info = client.health_info(p)
+        if info is not None:
+            _warn_protocol(info)
             return client.ApiClient(p, args.timeout), None, []
         # 健康检查失败：区分“没进程”（连接被拒）与“进程僵死”（TCP 可连但 HTTP 超时）
         if client.port_open(p):

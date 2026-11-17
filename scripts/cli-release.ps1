@@ -1,12 +1,12 @@
-﻿<#
+<#
 .SYNOPSIS
     构建并打包独立的 OMNI CLI（Windows x64 portable）。
 
 .DESCRIPTION
     只构建 CLI，不构建 Electron 前端/应用安装包：
-      1. python build.py --cli-only   -> python/dist/omni.exe
-      2. uv build                     -> python/dist/omni_cli-<version>-*.whl
-      3. 组装 portable zip            -> python/dist/cli-release/omni-cli-<version>-win64.zip
+      1. scripts/build-exe.ps1        -> dist/omni.exe
+      2. uv build                     -> dist/omni_cli-<version>-*.whl
+      3. 组装 portable zip            -> dist/cli-release/omni-cli-<version>-win64.zip
       4. 生成 SHA256SUMS.txt
 
 .PARAMETER OutputDir
@@ -67,15 +67,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PyDir      = Split-Path -Parent $ScriptDir
-$ProjectRoot = Split-Path -Parent $PyDir
-$DistDir    = Join-Path $PyDir "dist"
-$CliProj    = Join-Path $PyDir "omni_cli"
+$RepoRoot   = Split-Path -Parent $ScriptDir
+$DistDir    = Join-Path $RepoRoot "dist"
+$CliProj    = $RepoRoot
 $TemplateDir = Join-Path $ScriptDir "cli-install"
 $CliExe     = Join-Path $DistDir "omni.exe"
 
 function Find-Python {
-    $venv = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    $venv = Join-Path $RepoRoot ".venv\Scripts\python.exe"
     if (Test-Path -LiteralPath $venv) { return $venv }
     $cmd = Get-Command python -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -83,7 +82,7 @@ function Find-Python {
 }
 
 function Get-CliVersion($py) {
-    $code = "import sys; sys.path.insert(0, r'$PyDir'); from omni_cli import __version__; print(__version__)"
+    $code = "import sys; sys.path.insert(0, r'$RepoRoot'); from omni_cli import __version__; print(__version__)"
     $value = (& $py -c $code 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $value) {
         throw "无法读取 omni_cli 版本：$value"
@@ -150,7 +149,7 @@ $driveRoot = [System.IO.Path]::GetPathRoot($releaseFull).TrimEnd("\")
 if ($releaseFull -ieq $driveRoot) {
     throw "拒绝把 -OutputDir 指向磁盘根目录：$releaseDir"
 }
-foreach ($protected in @($ProjectRoot, $PyDir, $DistDir)) {
+foreach ($protected in @($RepoRoot, $DistDir)) {
     if ($releaseFull -ieq ([System.IO.Path]::GetFullPath($protected).TrimEnd("\"))) {
         throw "拒绝把 -OutputDir 指向受保护目录：$releaseDir"
     }
@@ -170,8 +169,8 @@ Write-Host "[cli-release] 输出: $releaseDir" -ForegroundColor DarkGray
 # 1. Build CLI exe
 # ---------------------------------------------------------------------------
 if (-not $SkipBuild) {
-    Write-Host "[1/4] python build.py --cli-only" -ForegroundColor Yellow
-    & $py (Join-Path $PyDir "build.py") --cli-only
+    Write-Host "[1/4] scripts/build-exe.ps1" -ForegroundColor Yellow
+    & (Join-Path $ScriptDir "build-exe.ps1") -Python $py
     if ($LASTEXITCODE -ne 0) { throw "CLI 构建失败" }
 } else {
     Write-Host "[1/4] 跳过 CLI 构建（-SkipBuild）" -ForegroundColor DarkGray
@@ -198,11 +197,12 @@ if (-not $SkipWheel) {
     # 清理 setuptools 的 build/lib、egg-info 和 __pycache__，
     # 避免把 .pyc 或旧文件带进 wheel。
     foreach ($cache in @(
-        (Join-Path $CliProj "build"),
-        (Join-Path $CliProj "omni_cli.egg-info"),
-        (Join-Path $CliProj "__pycache__"),
-        (Join-Path $CliProj "commands\__pycache__"),
-        (Join-Path $CliProj "config\__pycache__")
+        (Join-Path $RepoRoot "build"),
+        (Join-Path $RepoRoot "omni_cli.egg-info"),
+        (Join-Path $RepoRoot "__pycache__"),
+        (Join-Path $RepoRoot "omni_cli\__pycache__"),
+        (Join-Path $RepoRoot "omni_cli\commands\__pycache__"),
+        (Join-Path $RepoRoot "omni_cli\config\__pycache__")
     )) {
         if (Test-Path -LiteralPath $cache) { Remove-Item -LiteralPath $cache -Recurse -Force }
     }
@@ -249,7 +249,7 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 Copy-Item -LiteralPath $CliExe -Destination (Join-Path $stage "omni.exe") -Force
-Copy-Item -LiteralPath (Join-Path $ProjectRoot "LICENSE") -Destination (Join-Path $stage "LICENSE") -Force
+Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination (Join-Path $stage "LICENSE") -Force
 
 $readmeTemplate = Join-Path $TemplateDir "README.md"
 $readmeText = [System.IO.File]::ReadAllText($readmeTemplate)

@@ -6,7 +6,7 @@
 > - pyOCD 源码内置版：`python/pyocd/subcommands/`、`python/pyocd/core/options.py`
 > - 应用后端路由：`python/api/*.py`、`python/omni_tools/router.py`
 > - 应用页面：`src/pages/*`
-> - CLI 命令：`python/omni_cli/commands/*`
+> - CLI 命令：`omni_cli/commands/*`
 
 本文回答两个问题：
 

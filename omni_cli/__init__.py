@@ -1,10 +1,13 @@
-"""OMNI CLI
+"""OMNI CLI（`omni`）
 
-调试/烧录类命令通过 OMNI Link Python 后端的 REST/WebSocket 接口工作；
-`omni config` 是本地工程构建配置命令，实现在 `omni_cli.config` 内，不经过后端；
-`omni boards` 读取框架的板定义，实现在 `omni_cli.boards` 内；
-`omni modules` 生成模块注册表，实现在 `omni_cli.modules` 内；
-`omni build` 做 CMake 配置与构建，实现在 `omni_cli.build` 内。
+本包是独立项目（以 git submodule 形式挂在 OMNI Link 仓库的 `vendor/omni-cli/`），
+两类命令：
+
+- 调试/烧录类：`backend` / `probe` / `target` / `flash` / `commander` / `debug` /
+  `monitor` / `device` / `pack` / `rtt` / `system` / `file` / `tool`。
+  通过 HTTP 复用 OMNI Link 后端的 REST 接口，命令状态保存在后端进程里。
+- 工程配置/构建类：`omni config` / `omni build` / `omni toolchain` / `omni boards` /
+  `omni modules`，本地执行，只读 omni-emb 框架的 Kconfig / boards 数据。
 """
 
-__version__ = "0.23.2"
+__version__ = "0.24.0"

@@ -119,6 +119,25 @@ def reachable(port: int, timeout: float = 1.5) -> bool:
     return ApiClient(int(port), timeout).health(timeout)
 
 
+# CLI 支持的最高后端协议版本。后端在 /api/health 里上报 protocol；
+# 高于本值说明后端更新（新增了命令/字段），仍可工作，但提示升级 CLI。
+BACKEND_PROTOCOL = 1
+
+
+def health_info(port: int, timeout: float = 1.5) -> dict | None:
+    """返回 /api/health 的完整响应；不可达或非 JSON 时返回 None。
+
+    与 ``reachable`` 的区别：一次请求同时拿到 status/pid/protocol，供上层做
+    协议兼容判断，避免每条命令多打一次健康检查。
+    """
+    client = ApiClient(int(port), timeout)
+    try:
+        info = client.get("/api/health")
+    except Exception:
+        return None
+    return info if info.get("status") == "ok" else None
+
+
 def port_open(port: int, timeout: float = 0.5) -> bool:
     """TCP 层探测端口是否有进程监听（不依赖后端 HTTP 响应）。
 

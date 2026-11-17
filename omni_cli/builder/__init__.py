@@ -1,6 +1,6 @@
 """omni build 的实现包（CMake 配置 + 构建）。
 
-包名用 ``builder`` 而不是 ``build``：``python/omni_cli/build`` 会与 setuptools 的
+包名用 ``builder`` 而不是 ``build``：``omni_cli/build`` 会与 setuptools 的
 构建中间目录同名，容易误删。
 """
 

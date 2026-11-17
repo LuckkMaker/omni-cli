@@ -2,6 +2,10 @@
 
 把 OMNI Link 的调试能力（探针、烧录、RTT、设备库、Commander）和 OMNI 工程配置能力统一到一个命令行入口，便于脚本化、CI 与自动化测试。
 
+> 本仓库是独立项目：OMNI Link 以 git submodule 形式把它挂在 `vendor/omni-cli/`，
+> 安装包里的 `resources/python/omni.exe` 由本仓库的 `scripts/build-exe.ps1` 产出。
+> 调试/烧录命令仍然通过 HTTP 调用 OMNI Link 的 Python 后端。
+
 ## 定位
 
 OMNI CLI 有两类命令：
@@ -23,6 +27,15 @@ omni (本包)
 因此：**调试/烧录命令需要后端；`omni config` 与 `omni file checksum` 不需要后端，也不需要探针。**
 
 ## 版本记录
+
+### 0.24.0（独立项目首版）
+
+- 从 OMNI Link 仓库（`python/omni_cli/`）拆分为独立仓库，git 历史随迁。
+- 目录改为标准 Python 布局：包在 `omni_cli/`，测试在 `tests/`，打包/发布脚本在 `scripts/`。
+- 后端定位不再假定"包目录上两级是 omni-link"：环境变量 → 持久化配置 → 仓库布局探测（含 submodule 布局）。
+- 运行时文件（`.backend.log` / `.backend_runtime.json` / `cli.config.json`）统一写用户级目录，避免弄脏 submodule。
+- 新增 `scripts/build-exe.ps1`（PyInstaller 单文件 exe），`cli-release.ps1` 改为调用它。
+- `omni backend status` 输出后端 `protocol`；后端协议高于本 CLI 支持版本时给出一条升级提示。
 
 ### 0.22.0（未发布）
 
@@ -249,14 +262,18 @@ omni (本包)
 
 ## 安装
 
-### 方式一：wheel 安装（推荐，日常测试）
+本仓库可单独克隆使用，也可作为 OMNI Link 的 submodule（`vendor/omni-cli/`）。
+
+### 方式一：wheel 安装（推荐，日常开发）
+
+在 omni-cli 仓库根执行：
 
 ```powershell
-cd D:\workspace\embedded\omni-link
-powershell -File python\scripts\cli-package.ps1
+powershell -File scripts\cli-package.ps1
 ```
 
-该脚本会：`uv build --wheel` → `uv pip install` 到 `.venv` → 记录后端目录 → 验证 `omni --version`。
+该脚本会：`uv build --wheel` → `uv pip install` 到仓库 `.venv` → 记录 omni-link 后端目录 → 验证 `omni --version`。
+后端目录按以下顺序自动探测：`-BackendDir` 参数 → `OMNI_BACKEND_DIR` → submodule 布局（`<omni-link>/vendor/omni-cli`）→ 同级 `omni-link\python`。
 
 安装后 `omni` 位于 `.venv\Scripts\omni.exe`，激活 venv 后可直接使用：
 
@@ -275,35 +292,34 @@ omni -h
 | --- | --- |
 | `-NoBuild` | 跳过构建，仅重装已有 wheel |
 | `-StartBackend` | 安装后顺带启动常驻后端 |
+| `-BackendDir` | 显式指定 omni-link 的 `python/` 目录 |
 
 ### 方式二：源码直接运行（开发调试）
 
 ```powershell
-cd D:\workspace\embedded\omni-link\python
-& "..\.venv\Scripts\python.exe" -m omni_cli probe list
+cd D:\workspace\embedded\omni-cli
+& ".venv\Scripts\python.exe" -m omni_cli probe list
 ```
 
-源码态无需安装，改完代码立即生效；缺点是每次要带解释器和 `-m`。
+源码态无需安装，改完代码立即生效；缺点是每次要带解释器和 `-m`（或先 `pip install -e .`）。
 
 > 两种方式并存：wheel 安装后源码改动需要重跑一次 `cli-package.ps1` 才会生效。
 
 ### 方式三：CLI-only 独立发布（不打包整个应用）
 
-只更新 CLI 时，不需要重新构建 Electron 前端和 238 MB 的应用安装包：
-
 ```powershell
-cd D:\workspace\embedded\omni-link
-.\build.ps1 -CliOnly
-# 等价于
-powershell -File python\scripts\cli-release.ps1
+.\scripts\cli-release.ps1
+# 或只重建可执行文件
+.\scripts\build-exe.ps1
 ```
 
 产物：
 
 ```text
-python\dist\cli-release\omni-cli-<version>-win64.zip
-python\dist\cli-release\omni_cli-<version>-py3-none-any.whl
-python\dist\cli-release\SHA256SUMS.txt
+dist\cli-release\omni-cli-<version>-win64.zip
+dist\cli-release\omni_cli-<version>-py3-none-any.whl
+dist\cli-release\SHA256SUMS.txt
+dist\omni.exe
 ```
 
 zip 内包含 `omni.exe`、`README.md`、`LICENSE`、`install.ps1`、`uninstall.ps1`
@@ -314,18 +330,24 @@ zip 内包含 `omni.exe`、`README.md`、`LICENSE`、`install.ps1`、`uninstall.
 
 ```powershell
 # 只重打 zip，不重新构建 exe/wheel
-powershell -File python\scripts\cli-release.ps1 -SkipBuild -SkipWheel
+.\scripts\cli-release.ps1 -SkipBuild -SkipWheel
 
 # 不生成 zip，只保留组装目录
-powershell -File python\scripts\cli-release.ps1 -NoZip -KeepStaging
+.\scripts\cli-release.ps1 -NoZip -KeepStaging
 
 # 代码签名（可选）
-powershell -File python\scripts\cli-release.ps1 `
+.\scripts\cli-release.ps1 `
   -PfxPath .\certs\omni.pfx -PfxPassword "******" -RequireSigned
 ```
 
 > portable zip 不包含调试后端；`omni config` 可独立使用，`probe/flash/debug/rtt`
 > 需要已安装的 OMNI Link 后端或 `OMNI_BACKEND_DIR`/`OMNI_BACKEND_SERVER`。
+
+### 方式四：作为 OMNI Link 的 submodule 集成
+
+OMNI Link 在构建安装包前调用本仓库的 `scripts/build-exe.ps1`，把 `dist/omni.exe`
+拷到 `python/dist/omni.exe`，由 `extraResources` 打进 `resources/python/omni.exe`
+并由 NSIS 安装脚本加入用户 PATH。CLI 版本由 submodule commit 固定。
 
 ## 快速开始
 
@@ -1056,8 +1078,7 @@ CLI 在管道/重定向下会把 stdout/stderr 显式设为 UTF-8（`errors=back
 运行 `omni backend -h` 校验帮助输出：
 
 ```powershell
-python build.py --check-sources     # 只检查源码编码
-python build.py --cli-only          # 只重建 CLI（打包后自动校验帮助输出）
+python scripts\build-exe.ps1      # 构建单文件 exe（内含源码编码检查 + 产物自检）
 ```
 
 ## 环境变量
@@ -1073,11 +1094,12 @@ python build.py --cli-only          # 只重建 CLI（打包后自动校验帮�
 | `OMNI_CLI` | `omni_config.py` 启动器查找的 `omni` 可执行文件/目录 |
 | `OMNI_PROJECT_SKIP_VERSION_CHECK` | 设为 `1` 时启动器跳过版本检查 |
 
-`server.py` 定位优先级：`OMNI_BACKEND_SERVER` → `OMNI_BACKEND_DIR` → 包内 `cli.config.json`（由 `cli-package.ps1` 安装时写入）→ 源码树布局。
+`server.py` 定位优先级：`OMNI_BACKEND_SERVER` → `OMNI_BACKEND_DIR` → 用户级 `cli.config.json`（`cli-package.ps1` / `save_backend_dir` 写入）→ 仓库布局探测（含 submodule 布局）。
 
 ## 运行时文件
 
-均位于包目录（`.venv\Lib\site-packages\omni_cli\` 或源码目录）：
+均位于用户级状态目录（`%LOCALAPPDATA%\omni-link\`，`OMNI_STATE_DIR` 可覆盖）——
+不再写进包目录或仓库，避免弄脏 git（尤其在 submodule 里）：
 
 | 文件 | 说明 |
 | --- | --- |
@@ -1089,18 +1111,18 @@ python build.py --cli-only          # 只重建 CLI（打包后自动校验帮�
 ## 测试
 
 ```powershell
-cd D:\workspace\embedded\omni-link\python
+cd D:\workspace\embedded\omni-cli
 
-# 离线回归（无需硬件）：RTT 环形缓存、commander 选项前移、错误分类、编码检查、verify 字段
-..\.venv\Scripts\python.exe test_cli_fixes.py
+# 全部离线回归（无需硬件/后端）：CLI 全命令组
+Get-ChildItem tests\test_*.py | ForEach-Object { & .\.venv\Scripts\python.exe $_.FullName }
 
-# 工程配置回归（无需硬件/后端）：上下文解析、Kconfig 合并、BSP、Keil 同步
-..\.venv\Scripts\python.exe test_project_cli.py
+# 单个用例
+& .\.venv\Scripts\python.exe tests\test_cli_fixes.py
 
 # 源码编码检查（UTF-8 / 无 U+FFFD）
-..\.venv\Scripts\python.exe build.py --check-sources
+& .\.venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'tests'); import support; print(support.check_source_encoding(support.REPO_ROOT) or 'OK')"
 
-# 安全子集：自检 + 探针/目标 + 设备库 + Commander（不写 Flash）
+# 种子用例：自检 + 探针/目标 + 设备库 + Commander（不写 Flash）
 powershell -File scripts\cli-smoke.ps1 -UseInstalled
 
 # 追加破坏性回环：program → verify（含 bytes_verified 断言）→ blank-check → erase → blank-check
@@ -1116,6 +1138,10 @@ powershell -File scripts\cli-smoke.ps1 -UseInstalled -Rtt
 `-UseInstalled` 表示使用 venv 中已安装的 `omni.exe`；省略则用源码 `python -m omni_cli`。脚本会自行拉起后端、自动取第一个探针，结束时清理进程，每条命令后打印 `exit=`。
 `cli-smoke.ps1` 还会检查帮助输出无 U+FFFD、缺少 `--target` 的 `probe connect` 立即失败，任一检查不通过时脚本以非 0 退出。
 
+`tests/` 里有一部分"契约测试"直接断言 omni-link 后端的内部实现（RTT 环形缓存、flash payload、pack 管理）。
+它们按以下顺序寻找后端源码：`OMNI_LINK_PYTHON` → submodule 布局 → 同级 `omni-link\python`；都找不到时打印
+`SKIP` 而不是失败，因此 CI 不需要拉 omni-link。
+
 ## 常见问题
 
 **`错误: 未找到正在运行的后端`**
@@ -1127,7 +1153,7 @@ powershell -File scripts\cli-smoke.ps1 -UseInstalled -Rtt
 不需要重启后端即可重试。
 
 **`错误: 未找到后端 server.py: ...\site-packages\server.py`**
-wheel 安装后未记录后端位置。重跑 `python\scripts\cli-package.ps1`，或临时设置 `OMNI_BACKEND_DIR` 指向 `python\` 目录。
+wheel 安装后未记录后端位置。重跑 `scripts\cli-package.ps1`，或临时设置 `OMNI_BACKEND_DIR` 指向 `python\` 目录。
 
 **`omni config` 报“工程包含多个目标板”**
 该工程有多个 `boards/<target>`；用 `-b/--board` 指定，例如

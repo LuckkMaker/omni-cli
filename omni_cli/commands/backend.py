@@ -135,11 +135,13 @@ def _status(args):
 
     port = None
     hung = False
+    health: dict = {}
     for p in ports:
         if not p:
             continue
-        if bclient.reachable(p):
-            port = p
+        info = bclient.health_info(p)
+        if info is not None:
+            port, health = p, info
             break
         if bclient.port_open(p):
             port, hung = p, True
@@ -151,16 +153,19 @@ def _status(args):
 
     if args.json_:
         import json
-        print(json.dumps({"running": alive, "hung": hung, "pid": pid, "port": port},
+        print(json.dumps({"running": alive, "hung": hung, "pid": pid, "port": port,
+                          "protocol": health.get("protocol"),
+                          "service": health.get("service")},
                          ensure_ascii=False, indent=2))
         return 0 if alive else 1
 
+    proto_txt = f"  协议={health['protocol']}" if health.get("protocol") else ""
     if hung:
         pid_txt = f"  pid={pid}" if pid else ""
         print(f"僵死  端口={port}{pid_txt}（HTTP 无响应，用 `omni backend stop` 强杀）")
     elif alive:
         pid_txt = f"  pid={pid}" if pid else ""
-        print(f"运行中  端口={port}{pid_txt}")
+        print(f"运行中  端口={port}{pid_txt}{proto_txt}")
     else:
         print("未运行（可用 `omni backend start` 启动）")
     return 0 if alive else 1
