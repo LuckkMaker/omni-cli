@@ -25,6 +25,8 @@ from ..client import ApiClient
 from ..formatting import ctx_error, print_table
 from ..options import common_parser
 from ..runtime import finish, run_command
+from ._stream import hexdump, run_cursor_stream
+from .serial import _parse_hex
 
 #: 各能力对应的里程碑，用于未实现提示
 _MILESTONES = {
@@ -54,6 +56,9 @@ _HINTS = {
     "invalid_bufferlen": "bufferlen 取值范围 4096..134217728。",
     "invalid_devices": "--devices 用逗号分隔设备地址，如 1,2,3。",
     "unsupported_platform": "USB 抓包仅支持 Windows。",
+    "hid_unavailable": "HID 访问仅支持 Windows。",
+    "hid_not_found": "未找到该 VID/PID 的 HID 设备：先 `omni usb hid list` 确认。",
+    "hid_busy": "HID 设备被占用（系统驱动或其他进程独占）：关闭占用程序后重试。",
 }
 
 _TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "方向", "类型", "长度", "状态", "摘要"]
@@ -816,6 +821,374 @@ def _test_list(c: ApiClient, args):
     return 0
 
 
+def _cdc_list(c: ApiClient, args):
+    data = c.get("/api/serial/ports")
+    # 只保留 USB 设备（pyserial 能给出 VID/PID 的就是 USB 串口/CDC）
+    ports = [item for item in (data.get("ports") or []) if item.get("vid") or item.get("pid")]
+    if args.json_:
+        finish(args, {"ports": ports}, "")
+        return 0
+    if not ports:
+        finish(
+            args,
+            {"ports": []},
+            "未发现 USB CDC 设备。确认设备已枚举（设备管理器里出现 COM 口），"
+            "或用 `omni serial ports` 查看全部串口。",
+        )
+        return 0
+    rows = [
+        [
+            item.get("device"),
+            item.get("description"),
+            f"{item.get('vid') or '-'}:{item.get('pid') or '-'}",
+            item.get("manufacturer") or "-",
+        ]
+        for item in ports
+    ]
+    print_table(["端口", "描述", "VID:PID", "厂商"], rows)
+    return 0
+
+
+def _cdc_open(c: ApiClient, args):
+    payload = {
+        "connection_id": args.id,
+        "port": args.port,
+        "baudrate": args.baud,
+        "bytesize": args.bytesize,
+        "parity": args.parity,
+        "stopbits": args.stopbits,
+        "flow_control": args.flow,
+        "rts": bool(args.rts),
+        "dtr": bool(args.dtr),
+    }
+    data = c.post("/api/serial/open", payload)
+    if not data.get("success", True):
+        return _failure(data, "打开 CDC 设备失败")
+    finish(
+        args,
+        data,
+        f"CDC 已打开: {args.port} @ {args.baud} "
+        f"{args.bytesize}{args.parity}{int(args.stopbits)}"
+        f"（实例 {args.id}）",
+    )
+    return 0
+
+
+def _cdc_send(c: ApiClient, args):
+    sources = [item for item in (args.text, args.hex, args.file) if item]
+    if len(sources) != 1:
+        return ctx_error("需要且只能指定一种数据来源：--text / --hex / --file")
+    if args.text is not None:
+        data = args.text.encode("utf-8")
+        if not args.no_newline:
+            data += b"\n"
+    elif args.hex is not None:
+        try:
+            data = _parse_hex(args.hex)
+        except ValueError as exc:
+            return ctx_error(f"无效的十六进制字节: {exc}")
+    else:
+        try:
+            data = Path(args.file).read_bytes()
+        except OSError as exc:
+            return ctx_error(f"无法读取文件 {args.file}: {exc}")
+
+    resp = c.post(
+        "/api/serial/send", {"connection_id": args.id, "data": data.hex().upper()}
+    )
+    if not resp.get("success", True):
+        return _failure(resp, "发送失败")
+    preview = " ".join(f"{byte:02X}" for byte in data[:16])
+    if len(data) > 16:
+        preview += " …"
+    finish(args, resp, f"已发送 {len(data)} 字节（实例 {args.id}）  [{preview}]")
+    return 0
+
+
+def _cdc_read(c: ApiClient, args):
+    if args.wait is not None:
+        if args.follow:
+            return ctx_error("--wait 是一次性同步等读，不能与 --follow 同用")
+
+        def _fetch(since: int, max_bytes: int) -> dict:
+            return c.post(
+                "/api/serial/read",
+                {
+                    "connection_id": args.id,
+                    "since": since,
+                    "max_bytes": max_bytes,
+                    "timeout_ms": int(args.wait),
+                },
+            )
+
+    else:
+
+        def _fetch(since: int, max_bytes: int) -> dict:
+            return c.get(
+                f"/api/serial/data?connection_id={args.id}"
+                f"&since={since}&max_bytes={max_bytes}"
+            )
+
+    return run_cursor_stream(
+        args,
+        _fetch,
+        subject="CDC",
+        empty_hint="（暂无数据：确认设备在发送、波特率/校验位匹配，"
+        "或先 `omni usb cdc open`）",
+        cursor_key=f"cdc:{args.id}",
+        service_name="bus",
+    )
+
+
+def _cdc_break(c: ApiClient, args):
+    data = c.post(
+        "/api/serial/break",
+        {"connection_id": args.id, "duration_ms": int(args.duration_ms)},
+    )
+    if not data.get("success", True):
+        return _failure(data, "发送 BREAK 失败")
+    finish(args, data, f"已发送 BREAK（{args.duration_ms} ms，实例 {args.id}）")
+    return 0
+
+
+def _cdc_status(c: ApiClient, args):
+    data = c.get(f"/api/serial/status?connection_id={args.id}")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if not data.get("connected"):
+        finish(args, data, f"CDC 未打开（实例 {args.id}）。")
+        return 1
+    capture = data.get("capture") or {}
+    finish(
+        args,
+        data,
+        f"已打开  {data.get('port')} @ {data.get('baudrate')} "
+        f"{data.get('bytesize')}{data.get('parity')}{int(data.get('stopbits', 1))}"
+        f"（实例 {args.id}）\n"
+        f"接收缓冲: {capture.get('buffered_bytes', 0)} 字节"
+        f"（oldest_seq={capture.get('oldest_seq')} next_seq={capture.get('next_seq')}）",
+    )
+    return 0
+
+
+def _cdc_close(c: ApiClient, args):
+    data = c.post("/api/serial/close", {"connection_id": args.id})
+    if not data.get("success", True):
+        return _failure(data, "关闭失败")
+    finish(args, data, f"CDC 已关闭（实例 {args.id}）")
+    return 0
+
+
+def _as_number(text: str, field: str) -> int:
+    try:
+        return int(str(text), 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} 需要数字（如 0xC251）：{text}") from None
+
+
+def _hid_list(c: ApiClient, args):
+    data = c.get("/api/usb/hid/devices")
+    if not data.get("success", True):
+        return _failure(data, "HID 枚举失败")
+    devices = data.get("devices") or []
+    if args.vid:
+        devices = [item for item in devices if item.get("vid", "").lower() == args.vid.lower()]
+    if args.pid:
+        devices = [item for item in devices if item.get("pid", "").lower() == args.pid.lower()]
+    if args.json_:
+        finish(args, {"devices": devices}, "")
+        return 0
+    if not devices:
+        finish(args, {"devices": []}, "未发现匹配的 HID 设备。")
+        return 0
+    rows = [
+        [
+            f"{item.get('vid')}:{item.get('pid')}",
+            item.get("product") or "-",
+            item.get("manufacturer") or "-",
+            str(item.get("inputReportLength") or 0),
+            str(item.get("outputReportLength") or 0),
+            str(item.get("featureReportLength") or 0),
+            item.get("serial") or "-",
+        ]
+        for item in devices
+    ]
+    print_table(["VID:PID", "产品", "厂商", "IN", "OUT", "Feature", "序列号"], rows)
+    return 0
+
+
+def _hid_open(c: ApiClient, args):
+    try:
+        vid = _as_number(args.vid, "--vid")
+        pid = _as_number(args.pid, "--pid")
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    payload = {
+        "id": args.id,
+        "vid": vid,
+        "pid": pid,
+        "serial": args.serial,
+        "path": args.path,
+        "timeout_ms": args.timeout_ms,
+    }
+    data = c.post("/api/usb/hid/open", payload)
+    if not data.get("success", True):
+        return _failure(data, "打开 HID 设备失败")
+    device = data.get("device") or {}
+    finish(
+        args,
+        data,
+        f"HID 已打开 {device.get('vid')}:{device.get('pid')} "
+        f"{device.get('product') or ''}（实例 {args.id}）\n"
+        f"报告长度: IN {device.get('inputReportLength')} / "
+        f"OUT {device.get('outputReportLength')} / "
+        f"Feature {device.get('featureReportLength')}",
+    )
+    return 0
+
+
+def _hid_read(c: ApiClient, args):
+    if args.count < 0:
+        return ctx_error("--count 不能为负数")
+    reports: list[dict] = []
+    out_file = None
+    if args.out:
+        try:
+            out_file = open(args.out, "ab")
+        except OSError as exc:
+            return ctx_error(f"无法写入 {args.out}：{exc}")
+    try:
+        for index in range(args.count):
+            data = c.post(
+                "/api/usb/hid/read",
+                {
+                    "id": args.id,
+                    "length": args.length,
+                    "timeout_ms": args.timeout_ms,
+                },
+            )
+            if not data.get("success", True):
+                return _failure(data, f"第 {index + 1} 次读取失败")
+            raw = bytes.fromhex((data.get("dataHex") or "").replace(" ", ""))
+            if out_file is not None:
+                out_file.write(raw)
+                out_file.flush()
+            reports.append(data)
+            if not args.json_ and not args.quiet:
+                print(f"#{index + 1}  {len(raw)} 字节")
+                if raw:
+                    print(hexdump(raw))
+    finally:
+        if out_file is not None:
+            out_file.close()
+
+    if args.json_:
+        finish(args, {"reports": reports}, "")
+    elif not reports and not args.quiet:
+        print("没有读到报告。")
+    return 0
+
+
+def _read_payload(args) -> tuple[bytes | None, str]:
+    if args.data is not None:
+        try:
+            return _parse_hex(args.data), ""
+        except ValueError as exc:
+            return None, f"无效的十六进制字节: {exc}"
+    if args.file:
+        try:
+            return Path(args.file).read_bytes(), ""
+        except OSError as exc:
+            return None, f"无法读取 {args.file}：{exc}"
+    return b"", ""
+
+
+def _hid_write(c: ApiClient, args):
+    payload, problem = _read_payload(args)
+    if problem:
+        return ctx_error(problem)
+    if not payload:
+        return ctx_error("需要 --data（十六进制）或 --file")
+    data = c.post(
+        "/api/usb/hid/write",
+        {
+            "id": args.id,
+            "hex": payload.hex().upper(),
+            "report_id": args.report_id,
+            "timeout_ms": args.timeout_ms,
+        },
+    )
+    if not data.get("success", True):
+        return _failure(data, "写报告失败")
+    finish(
+        args,
+        data,
+        f"已写报告 {data.get('bytesWritten')} 字节（report id {args.report_id}，实例 {args.id}）",
+    )
+    return 0
+
+
+def _hid_feature(c: ApiClient, args):
+    if args.get:
+        data = c.post(
+            "/api/usb/hid/feature/get",
+            {"id": args.id, "report_id": args.report_id},
+        )
+        if not data.get("success", True):
+            return _failure(data, "读取 Feature 报告失败")
+        raw = bytes.fromhex((data.get("dataHex") or "").replace(" ", ""))
+        if args.json_:
+            finish(args, data, "")
+        else:
+            finish(args, data, hexdump(raw) if raw else "（空）")
+        return 0
+
+    payload, problem = _read_payload(args)
+    if problem:
+        return ctx_error(problem)
+    if not payload:
+        return ctx_error("--set 需要 --data（十六进制）或 --file")
+    data = c.post(
+        "/api/usb/hid/feature/set",
+        {
+            "id": args.id,
+            "hex": payload.hex().upper(),
+            "report_id": args.report_id,
+        },
+    )
+    if not data.get("success", True):
+        return _failure(data, "写 Feature 报告失败")
+    finish(args, data, f"已写 Feature 报告 {len(payload)} 字节（report id {args.report_id}）")
+    return 0
+
+
+def _hid_status(c: ApiClient, args):
+    data = c.get(f"/api/usb/hid/status?id={args.id}")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if not data.get("connected"):
+        finish(args, data, f"HID 会话未打开（实例 {args.id}）。")
+        return 1
+    device = data.get("device") or {}
+    finish(
+        args,
+        data,
+        f"已打开 {device.get('vid')}:{device.get('pid')} {device.get('product') or ''}"
+        f"（实例 {args.id}，超时 {data.get('timeoutMs')} ms）",
+    )
+    return 0
+
+
+def _hid_close(c: ApiClient, args):
+    data = c.post("/api/usb/hid/close", {"id": args.id})
+    if not data.get("success", True):
+        return _failure(data, "关闭失败")
+    finish(args, data, f"HID 已关闭（实例 {args.id}）")
+    return 0
+
+
 def add_parser(sub):
     p = sub.add_parser(
         "usb",
@@ -1028,6 +1401,111 @@ def add_parser(sub):
     s.add_argument("transfer_id", type=int, help="传输 ID")
     s.add_argument("--id", dest="session", default="cli", metavar="ID", help="目标会话（默认 cli）")
     s.set_defaults(func=_todo("replay"))
+
+    # ── USB HID（系统 HID 驱动，报告级） ─────────────────
+    h = ps.add_parser("hid", help="USB HID 报告收发（系统 HID 驱动）")
+    hs = h.add_subparsers(dest="usb_hid_sub", metavar="<sub>")
+
+    s = hs.add_parser("list", parents=[common_parser()], help="列出 HID 设备")
+    s.add_argument("--vid", help="按 VID 过滤，如 0xC251")
+    s.add_argument("--pid", help="按 PID 过滤，如 0x0001")
+    s.set_defaults(func=run_command(_hid_list))
+
+    s = hs.add_parser("open", parents=[common_parser()], help="打开 HID 设备（独占）")
+    s.add_argument("--vid", required=True, help="VID，如 0xC251")
+    s.add_argument("--pid", required=True, help="PID，如 0x0001")
+    s.add_argument("--serial", help="序列号（同型号多设备时区分）")
+    s.add_argument("--path", help="设备接口路径（优先于 VID/PID）")
+    s.add_argument("--id", default="cli", metavar="ID", help="会话 ID")
+    s.add_argument("--timeout-ms", type=int, default=1000, help="报告收发超时（默认 1000）")
+    s.set_defaults(func=run_command(_hid_open))
+
+    s = hs.add_parser("read", parents=[common_parser()], help="读取 Input 报告")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--length", type=int, help="报告长度（默认取设备 InputReportByteLength）")
+    s.add_argument("--count", type=int, default=1, help="读取次数（默认 1）")
+    s.add_argument("--timeout-ms", type=int, default=None, help="单次超时")
+    s.add_argument("--out", metavar="FILE", help="把报告追加写入文件（二进制）")
+    s.set_defaults(func=run_command(_hid_read))
+
+    s = hs.add_parser("write", parents=[common_parser()], help="写 Output 报告")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--data", help="报告载荷（十六进制，不含 Report ID）")
+    s.add_argument("--file", help="从文件读取载荷")
+    s.add_argument("--report-id", type=int, default=0, help="Report ID（默认 0）")
+    s.add_argument("--timeout-ms", type=int, default=None)
+    s.set_defaults(func=run_command(_hid_write))
+
+    s = hs.add_parser("feature", parents=[common_parser()], help="读写 Feature 报告")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--report-id", type=int, default=0)
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--get", action="store_true", help="读取 Feature 报告")
+    g.add_argument("--set", action="store_true", help="写入 Feature 报告")
+    s.add_argument("--data", help="载荷（十六进制）")
+    s.add_argument("--file", help="载荷文件")
+    s.set_defaults(func=run_command(_hid_feature))
+
+    s = hs.add_parser("status", parents=[common_parser()], help="查询 HID 会话状态")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_hid_status))
+
+    s = hs.add_parser("close", parents=[common_parser()], help="关闭 HID 会话")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_hid_close))
+
+    # ── USB CDC（复用串口后端） ──────────────────────────
+    c = ps.add_parser("cdc", help="USB CDC 收发（复用串口后端；含 BREAK）")
+    cs = c.add_subparsers(dest="usb_cdc_sub", metavar="<sub>")
+
+    s = cs.add_parser("list", parents=[common_parser()], help="列出 USB CDC 设备（按 VID/PID 过滤）")
+    s.set_defaults(func=run_command(_cdc_list))
+
+    s = cs.add_parser("open", parents=[common_parser()], help="打开 CDC 串口")
+    s.add_argument("--port", required=True, metavar="COM", help="端口名，如 COM65")
+    s.add_argument("--baud", type=int, default=115200, help="波特率（默认 115200）")
+    s.add_argument("--bytesize", type=int, default=8, choices=(5, 6, 7, 8))
+    s.add_argument("--parity", default="N", choices=("N", "E", "O", "M", "S"))
+    s.add_argument("--stopbits", type=float, default=1, choices=(1, 1.5, 2))
+    s.add_argument("--flow", default="none", choices=("none", "xonxoff", "rtscts"))
+    s.add_argument("--rts", action="store_true", help="打开时置位 RTS")
+    s.add_argument("--dtr", action="store_true", help="打开时置位 DTR")
+    s.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID")
+    s.set_defaults(func=run_command(_cdc_open))
+
+    s = cs.add_parser("send", parents=[common_parser()], help="发送数据（文本 / 十六进制 / 文件）")
+    s.add_argument("--text", metavar="TEXT", help="发送文本（默认追加换行）")
+    s.add_argument("--hex", metavar="HEX", help="发送十六进制字节")
+    s.add_argument("--file", metavar="PATH", help="发送文件原始字节")
+    s.add_argument("--no-newline", action="store_true", help="--text 不追加换行")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_cdc_send))
+
+    s = cs.add_parser("read", parents=[common_parser()], help="读取接收缓冲（一次性 / 等读 / 持续）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--since", type=int, default=None, help="从指定 seq 开始读")
+    s.add_argument("--max-bytes", type=int, default=65536)
+    s.add_argument("--wait", type=int, default=None, metavar="MS", help="同步等读，最多等该毫秒数")
+    s.add_argument("--follow", action="store_true", help="持续跟踪（Ctrl+C 结束）")
+    s.add_argument("--interval", type=float, default=0.2)
+    s.add_argument("--duration", type=float, default=0.0)
+    s.add_argument("--out", metavar="FILE", help="原始字节追加写入文件")
+    s.add_argument("--encoding", default=None, metavar="ENC")
+    s.add_argument("--hex", action="store_true", help="十六进制转储显示")
+    s.set_defaults(func=run_command(_cdc_read))
+
+    s = cs.add_parser("break", parents=[common_parser()], help="发送 BREAK（CDC SEND_BREAK 等价）")
+    s.add_argument("--duration-ms", type=int, default=250, help="BREAK 持续时间（默认 250 ms）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_cdc_break))
+
+    s = cs.add_parser("status", parents=[common_parser()], help="查询 CDC 状态与接收缓冲")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_cdc_status))
+
+    s = cs.add_parser("close", parents=[common_parser()], help="关闭 CDC（接收缓存保留）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_cdc_close))
 
     # ── 测试（M4） ────────────────────────────────────────
     t = ps.add_parser("test", help="声明式回归用例")

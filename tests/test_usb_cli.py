@@ -82,6 +82,32 @@ def ns(**kw) -> argparse.Namespace:
         name="winusb",
         junit=None,
         keep_going=False,
+        port=None,
+        baud=115200,
+        bytesize=8,
+        parity="N",
+        stopbits=1,
+        flow="none",
+        rts=False,
+        dtr=False,
+        text=None,
+        no_newline=False,
+        duration_ms=250,
+        id="cli",
+        max_bytes=65536,
+        wait=None,
+        encoding=None,
+        vid=None,
+        pid=None,
+        serial=None,
+        path=None,
+        timeout_ms=1000,
+        length=None,
+        count=1,
+        data=None,
+        report_id=0,
+        get=False,
+        set=False,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -140,7 +166,7 @@ def main() -> int:
     # ── 1. 命令面 ────────────────────────────────────────
     code, out, _ = run_cli(["usb", "--help"])
     check("usb --help 退出码 0", code == 0, str(code))
-    for sub in ("doctor", "list", "control", "desc", "capture", "test"):
+    for sub in ("doctor", "list", "control", "desc", "hid", "cdc", "capture", "test"):
         check(f"usb --help 含 {sub}", sub in out)
 
     code, out, _ = run_cli([])
@@ -396,6 +422,142 @@ def main() -> int:
         ns(),
     )
     check("test list 显示用例格式", code == 0 and "demo" in out, out)
+
+    # ── 2e. cdc（复用串口后端） ──────────────────────────
+    ports = {
+        "ports": [
+            {
+                "device": "COM65",
+                "description": "USB 串行设备",
+                "vid": "0xC251",
+                "pid": "0x0001",
+                "manufacturer": "Geehy",
+            },
+            {"device": "COM1", "description": "通信端口", "vid": None, "pid": None},
+        ]
+    }
+    code, out, _ = capture(
+        usb_cmd._cdc_list, StubClient({"/api/serial/ports": ports}), ns()
+    )
+    check("cdc list 只列 USB 设备", code == 0 and "COM65" in out and "COM1" not in out, out)
+
+    client = StubClient({"/api/serial/open": {"success": True}})
+    code, out, _ = capture(usb_cmd._cdc_open, client, ns(port="COM65"))
+    check("cdc open 退出码 0", code == 0 and "COM65" in out, out)
+    payload = client.calls[0][2]
+    check(
+        "cdc open 载荷正确",
+        payload.get("port") == "COM65" and payload.get("connection_id") == "cli",
+        str(payload),
+    )
+
+    client = StubClient({"/api/serial/break": {"success": True}})
+    code, out, _ = capture(usb_cmd._cdc_break, client, ns(duration_ms=100))
+    check("cdc break 退出码 0", code == 0 and "BREAK" in out, out)
+    check(
+        "cdc break 载荷含 duration_ms",
+        client.calls[0][2].get("duration_ms") == 100,
+        str(client.calls[0][2]),
+    )
+
+    code, _, _ = capture(
+        usb_cmd._cdc_status,
+        StubClient({"/api/serial/status": {"connected": False}}),
+        ns(),
+    )
+    check("cdc status 未打开退出码 1", code == 1, str(code))
+
+    # ── 2f. hid（系统 HID 驱动） ─────────────────────────
+    hid_devices = {
+        "success": True,
+        "devices": [
+            {
+                "vid": "0xC251",
+                "pid": "0x0001",
+                "product": "HID Demo",
+                "manufacturer": "Geehy",
+                "serial": "1",
+                "inputReportLength": 64,
+                "outputReportLength": 64,
+                "featureReportLength": 0,
+            },
+            {
+                "vid": "0x1234",
+                "pid": "0x0001",
+                "product": "Other",
+                "manufacturer": "-",
+                "serial": "",
+                "inputReportLength": 8,
+                "outputReportLength": 8,
+                "featureReportLength": 0,
+            },
+        ],
+    }
+    code, out, _ = capture(
+        usb_cmd._hid_list, StubClient({"/api/usb/hid/devices": hid_devices}), ns()
+    )
+    check("hid list 显示设备", code == 0 and "HID Demo" in out and "64" in out, out)
+
+    code, out, _ = capture(
+        usb_cmd._hid_list,
+        StubClient({"/api/usb/hid/devices": hid_devices}),
+        ns(vid="0x1234"),
+    )
+    check("hid list 按 VID 过滤", "HID Demo" not in out and "Other" in out, out)
+
+    client = StubClient(
+        {
+            "/api/usb/hid/open": {
+                "success": True,
+                "device": hid_devices["devices"][0],
+                "id": "cli",
+            }
+        }
+    )
+    code, out, _ = capture(
+        usb_cmd._hid_open, client, ns(vid="0xC251", pid="0x0001")
+    )
+    check("hid open 退出码 0", code == 0 and "0xC251" in out, out)
+    payload = client.calls[0][2]
+    check(
+        "hid open 载荷 vid/pid 为整数",
+        payload.get("vid") == 0xC251 and payload.get("pid") == 0x0001,
+        str(payload),
+    )
+
+    code, out, _ = capture(
+        usb_cmd._hid_read,
+        StubClient(
+            {
+                "/api/usb/hid/read": {
+                    "success": True,
+                    "dataHex": "01 02 03",
+                    "length": 3,
+                }
+            }
+        ),
+        ns(),
+    )
+    check("hid read 显示十六进制", code == 0 and "01 02 03" in out, out)
+
+    client = StubClient({"/api/usb/hid/write": {"success": True, "bytesWritten": 64}})
+    code, out, _ = capture(
+        usb_cmd._hid_write, client, ns(data="AA BB", report_id=1)
+    )
+    check("hid write 退出码 0", code == 0 and "64" in out, out)
+    payload = client.calls[0][2]
+    check(
+        "hid write 载荷正确",
+        payload.get("hex") == "AABB" and payload.get("report_id") == 1,
+        str(payload),
+    )
+
+    code, _, _ = capture(
+        usb_cmd._hid_status,
+        StubClient({"/api/usb/hid/status": {"success": True, "connected": False}}),
+        ns(),
+    )
+    check("hid status 未打开退出码 1", code == 1, str(code))
 
     # ── 3. doctor（M1） ──────────────────────────────────
     code, out, _ = capture(

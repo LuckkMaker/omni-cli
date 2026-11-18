@@ -23,7 +23,10 @@
 | 工程构建 | 对应工具链：Keil `armclang`、`arm-none-eabi-gcc`、`cmake`、`ninja` | `omni build` 报工具缺失；`omni toolchain` 打印解析来源 |
 | 串口 / Modbus / 网络 | 无额外组件（Windows 10+ 自带 `usbser`，CDC 设备免驱） | — |
 | **USB 描述符**（解析 / 校验 / 生成） | **无**，纯离线 | — |
-| **USB 请求**（枚举 / 控制 / 批量收发，计划 M3） | 接口必须由可编程驱动接管：WinUSB（固件提供 MS OS 2.0 描述符，或用 INF 绑定）；HID 走系统 HID 驱动（仅报告级）；CDC 走 COM 口（复用 `omni serial`） | 能枚举但打不开；提示"驱动未绑定"。被 usbstor/厂商私有驱动占用的设备只能抓包看，不能发请求 |
+| **USB CDC 收发**（M3a 已实现） | 无额外组件（Windows 10+ 自带 `usbser`） | `omni usb cdc list` 为空时先看设备管理器 |
+| **USB HID 报告**（M3b 已实现） | 无额外组件（系统 HID 驱动）；设备被独占时打不开 | `omni usb hid list` 为空 / `hid_busy` |
+| **USB WinUSB 请求**（M3c 待实现） | 接口需绑定 WinUSB（MS OS 2.0 描述符或 INF） | 能枚举但打不开，提示驱动未绑定 |
+| **USB 请求（旧：任意设备）** | 已被 WinUSB/HID/CDC 三条通道替代；任意设备需 UsbDk/自研驱动（见 `usb-raw-access.md`） | — |
 | **USB 抓包**（M1 已实现） | [USBPcap](https://desowin.org/usbpcap/) 1.5.4+（官方安装器，装完重启）；**管理员终端** | `omni usb doctor` 报未安装 / 非管理员，并给出下一步 |
 | **USB 测试**（M4a 已实现：离线 pcap 用例；动作步骤待 M4b） | 无额外组件（只需用例引用的 pcap 文件）；动作类步骤将来需要 WinUSB/USBPcap | `test run` 报 `pcap 不存在` 或用例格式错误 |
 
@@ -63,7 +66,8 @@ omni usb capture doctor        # 同上，抓包视角
 | `omni usb` 命令组（命令面） | CLI 0.28.0 / bus 0.2.0 |
 | USB 抓包（M1，已实现） | CLI 0.28.x / bus 0.2.x |
 | 描述符（M2，已实现） | CLI 0.29.x |
-| 请求（M3） | 暂停（先论证，见 `omni-backend/docs/usb-raw-access.md`） |
+| 请求（M3a CDC / M3b HID，已实现） | CLI 0.30.x |
+| 请求（M3c WinUSB） | 待实现 |
 | 测试（M4a 离线用例，已实现） | CLI 0.32.x |
 
 > 里程碑与验收标准见 `omni-backend/docs/usb-plan.md`。
