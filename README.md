@@ -365,15 +365,25 @@ OMNI Link / OMNI Bus **不再内置** CLI：安装包只带各自后端，`omni`
 ## 构建与发布
 
 ```powershell
-.\build.ps1                 # 只构建 dist\omni.exe（PyInstaller 单文件）
-.\build.ps1 -Release        # 发布包：exe + wheel + portable zip + SHA256（可签名）
-.\build.ps1 -Release -Clean -PfxPath .\certs\omni.pfx
-.\build.ps1 -Plan           # 只打印将执行的命令，不构建
+.\build.ps1                      # 只构建 dist\omni.exe（PyInstaller 单文件）
+.\build.ps1 -Installer           # 额外生成 dist\OMNI-CLI-<ver>-x64-setup.exe
+.\build.ps1 -Release             # 发布包：exe + wheel + portable zip + SHA256（可签名）
+.\build.ps1 -Release -Installer  # 发布包 + Windows 安装包
+.\build.ps1 -Plan                # 只打印将执行的命令，不构建
 ```
 
-`build.ps1` 只是编排，实际工作在 `scripts/build-exe.ps1`（exe）与
-`scripts/cli-release.ps1`（发布包）。GUI（OMNI Link / OMNI Bus）不再内置 CLI，
-由本仓库的安装包或 `scripts/cli-install/install.ps1` 单独安装。
+`build.ps1` 只是编排，实际工作在 `scripts/build-exe.ps1`（exe）、
+`scripts/cli-release.ps1`（发布包）与 `scripts/make-installer.ps1`（NSIS 安装包）。
+
+安装包行为：
+
+- 按用户安装到 `%LOCALAPPDATA%\Programs\OMNI CLI\bin`，无需管理员；
+- 自动把该目录加入用户 PATH，卸载时移除；
+- 在「应用和功能」里注册卸载项，支持静默安装/卸载（`/S`）；
+- `makensis` 找不到时自动使用 electron-builder 缓存，也可用 `-NsisPath` 指定。
+
+GUI（OMNI Link / OMNI Bus）不再内置 CLI，由本仓库的安装包或
+`scripts/cli-install/install.ps1` 单独安装。
 
 ## 快速开始
 

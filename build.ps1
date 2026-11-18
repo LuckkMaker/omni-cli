@@ -3,14 +3,19 @@
     OMNI CLI 一键构建脚本。
 
 .DESCRIPTION
-    默认构建单文件 omni.exe；-Release 构建可分发产物（exe + wheel + portable zip + SHA256）。
+    默认构建单文件 omni.exe；-Installer 额外生成 Windows 安装包（Setup.exe）；
+    -Release 构建可分发产物（exe + wheel + portable zip + SHA256）。
 
-    实际工作委托给两个子脚本，避免重复逻辑：
-      scripts/build-exe.ps1      PyInstaller 单文件 exe
-      scripts/cli-release.ps1    exe + wheel + zip + SHA256（可签名）
+    实际工作委托给子脚本，避免重复逻辑：
+      scripts/build-exe.ps1        PyInstaller 单文件 exe
+      scripts/cli-release.ps1      exe + wheel + zip + SHA256（可签名）
+      scripts/make-installer.ps1   NSIS 安装包（可签名）
 
 .PARAMETER Release
     构建发布包（CLI portable zip + wheel），而不是只构建 exe。
+
+.PARAMETER Installer
+    生成 Windows 安装包（NSIS Setup.exe）。可与 -Release 组合。
 
 .PARAMETER Exe
     只构建 exe（默认行为，显式指定便于脚本阅读）。
@@ -22,7 +27,7 @@
     发布模式：打包前清理输出目录。
 
 .PARAMETER SkipBuild
-    发布模式：跳过 PyInstaller，复用已有 dist/omni.exe。
+    跳过 PyInstaller，复用已有 dist/omni.exe。
 
 .PARAMETER SkipWheel
     发布模式：跳过 wheel 构建。
@@ -36,17 +41,22 @@
 .PARAMETER Python
     exe 模式：指定解释器。
 
+.PARAMETER NsisPath
+    安装包模式：makensis.exe 路径；不填则自动查找（PATH / electron-builder 缓存）。
+
 .PARAMETER SignTool / PfxPath / PfxPassword / CertSha1 / CertSubject / TimestampServer / RequireSigned
-    发布模式：代码签名参数，原样透传给 cli-release.ps1。
+    发布/安装包模式：代码签名参数，原样透传。
 
 .EXAMPLE
     .\build.ps1
-    .\build.ps1 -Release
-    .\build.ps1 -Release -Clean -PfxPath .\certs\omni.pfx
+    .\build.ps1 -Installer
+    .\build.ps1 -Release -Installer
+    .\build.ps1 -Installer -SkipBuild
     .\build.ps1 -Plan
 #>
 param(
     [switch]$Release,
+    [switch]$Installer,
     [switch]$Exe,
     [switch]$Plan,
     [switch]$Clean,
@@ -55,6 +65,7 @@ param(
     [switch]$NoZip,
     [string]$OutputDir = "",
     [string]$Python = "",
+    [string]$NsisPath = "",
     [string]$SignTool = "",
     [string]$PfxPath = "",
     [string]$PfxPassword = "",
@@ -66,16 +77,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir     = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ExeScript     = Join-Path $ScriptDir "scripts\build-exe.ps1"
-$ReleaseScript = Join-Path $ScriptDir "scripts\cli-release.ps1"
-$InitFile      = Join-Path $ScriptDir "omni_cli\__init__.py"
+$ScriptDir      = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ExeScript      = Join-Path $ScriptDir "scripts\build-exe.ps1"
+$ReleaseScript  = Join-Path $ScriptDir "scripts\cli-release.ps1"
+$InstallerScript = Join-Path $ScriptDir "scripts\make-installer.ps1"
+$InitFile       = Join-Path $ScriptDir "omni_cli\__init__.py"
 
 if ($Release -and $Exe) {
     Write-Host "ERROR: -Release 与 -Exe 只能选一个。" -ForegroundColor Red
     exit 2
 }
-foreach ($script in @($ExeScript, $ReleaseScript)) {
+if ($Installer -and $Exe) {
+    Write-Host "ERROR: -Installer 与 -Exe 只能选一个（-Installer 会先构建 exe）。" -ForegroundColor Red
+    exit 2
+}
+foreach ($script in @($ExeScript, $ReleaseScript, $InstallerScript)) {
     if (-not (Test-Path -LiteralPath $script)) {
         Write-Host "ERROR: 找不到子脚本: $script" -ForegroundColor Red
         exit 1
@@ -106,60 +122,100 @@ function Format-Command([string]$script, [hashtable]$arguments) {
     return ($parts -join " ")
 }
 
+function Get-SignArguments {
+    $sign = @{}
+    if ($SignTool) { $sign["SignTool"] = $SignTool }
+    if ($PfxPath) { $sign["PfxPath"] = $PfxPath }
+    if ($PfxPassword) { $sign["PfxPassword"] = $PfxPassword }
+    if ($CertSha1) { $sign["CertSha1"] = $CertSha1 }
+    if ($CertSubject) { $sign["CertSubject"] = $CertSubject }
+    if ($TimestampServer) { $sign["TimestampServer"] = $TimestampServer }
+    if ($RequireSigned) { $sign["RequireSigned"] = $true }
+    return $sign
+}
+
+function Get-InstallerArguments {
+    $arguments = @{ Version = $version }
+    if ($OutputDir) { $arguments["OutputDir"] = $OutputDir }
+    if ($NsisPath) { $arguments["NsisPath"] = $NsisPath }
+    foreach ($key in (Get-SignArguments).Keys) { $arguments[$key] = (Get-SignArguments)[$key] }
+    return $arguments
+}
+
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  OMNI CLI Build (v$version)" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
-if ($Release) {
-    $cliArgs = @{}
-    if ($Clean) { $cliArgs["Clean"] = $true }
-    if ($SkipBuild) { $cliArgs["SkipBuild"] = $true }
-    if ($SkipWheel) { $cliArgs["SkipWheel"] = $true }
-    if ($NoZip) { $cliArgs["NoZip"] = $true }
-    if ($OutputDir) { $cliArgs["OutputDir"] = $OutputDir }
-    if ($SignTool) { $cliArgs["SignTool"] = $SignTool }
-    if ($PfxPath) { $cliArgs["PfxPath"] = $PfxPath }
-    if ($PfxPassword) { $cliArgs["PfxPassword"] = $PfxPassword }
-    if ($CertSha1) { $cliArgs["CertSha1"] = $CertSha1 }
-    if ($CertSubject) { $cliArgs["CertSubject"] = $CertSubject }
-    if ($TimestampServer) { $cliArgs["TimestampServer"] = $TimestampServer }
-    if ($RequireSigned) { $cliArgs["RequireSigned"] = $true }
-
-    if ($Plan) {
-        Write-Host "[plan] $(Format-Command $ReleaseScript $cliArgs)" -ForegroundColor Yellow
-        exit 0
-    }
-
-    Write-Host "--- 发布模式：exe + wheel + portable zip ---" -ForegroundColor Yellow
-    & $ReleaseScript @cliArgs
-    exit $LASTEXITCODE
-}
-
-$exeArgs = @{}
-if ($Python) { $exeArgs["Python"] = $Python }
-if ($OutputDir) { $exeArgs["OutputDir"] = $OutputDir }
-
 if ($Plan) {
-    Write-Host "[plan] $(Format-Command $ExeScript $exeArgs)" -ForegroundColor Yellow
+    if ($Release) {
+        $releaseArgs = @{}
+        if ($Clean) { $releaseArgs["Clean"] = $true }
+        if ($SkipBuild) { $releaseArgs["SkipBuild"] = $true }
+        if ($SkipWheel) { $releaseArgs["SkipWheel"] = $true }
+        if ($NoZip) { $releaseArgs["NoZip"] = $true }
+        if ($OutputDir) { $releaseArgs["OutputDir"] = $OutputDir }
+        foreach ($key in (Get-SignArguments).Keys) { $releaseArgs[$key] = (Get-SignArguments)[$key] }
+        Write-Host "[plan] $(Format-Command $ReleaseScript $releaseArgs)" -ForegroundColor Yellow
+    } else {
+        if ($SkipBuild) {
+            Write-Host "[plan] 跳过 exe 构建（-SkipBuild），使用 dist\omni.exe" -ForegroundColor Yellow
+        } else {
+            $exeArgs = @{}
+            if ($Python) { $exeArgs["Python"] = $Python }
+            if ($OutputDir) { $exeArgs["OutputDir"] = $OutputDir }
+            Write-Host "[plan] $(Format-Command $ExeScript $exeArgs)" -ForegroundColor Yellow
+        }
+    }
+    if ($Installer) {
+        $installerArgs = Get-InstallerArguments
+        $installerArgs["Plan"] = $true
+        Write-Host "[plan] $(Format-Command $InstallerScript $installerArgs)" -ForegroundColor Yellow
+    }
     exit 0
 }
 
-Write-Host "--- exe 模式：PyInstaller 单文件 ---" -ForegroundColor Yellow
-& $ExeScript @exeArgs
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: exe 构建失败（退出码 $LASTEXITCODE）。" -ForegroundColor Red
-    exit $LASTEXITCODE
+if ($Release) {
+    $releaseArgs = @{}
+    if ($Clean) { $releaseArgs["Clean"] = $true }
+    if ($SkipBuild) { $releaseArgs["SkipBuild"] = $true }
+    if ($SkipWheel) { $releaseArgs["SkipWheel"] = $true }
+    if ($NoZip) { $releaseArgs["NoZip"] = $true }
+    if ($OutputDir) { $releaseArgs["OutputDir"] = $OutputDir }
+    foreach ($key in (Get-SignArguments).Keys) { $releaseArgs[$key] = (Get-SignArguments)[$key] }
+
+    Write-Host "--- 发布模式：exe + wheel + portable zip ---" -ForegroundColor Yellow
+    & $ReleaseScript @releaseArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
+    if (-not $SkipBuild) {
+        $exeArgs = @{}
+        if ($Python) { $exeArgs["Python"] = $Python }
+        if ($OutputDir) { $exeArgs["OutputDir"] = $OutputDir }
+        Write-Host "--- exe 模式：PyInstaller 单文件 ---" -ForegroundColor Yellow
+        & $ExeScript @exeArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } else {
+        Write-Host "--- 跳过 exe 构建（-SkipBuild） ---" -ForegroundColor DarkGray
+    }
 }
 
-$distDir = if ($OutputDir) { $OutputDir } else { Join-Path $ScriptDir "dist" }
-$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "omni.exe" } else { "omni" }
-$exePath = Join-Path $distDir $exeName
-if (-not (Test-Path -LiteralPath $exePath)) {
-    Write-Host "ERROR: 构建结束但找不到产物: $exePath" -ForegroundColor Red
-    exit 1
+if ($Installer) {
+    $installerArgs = Get-InstallerArguments
+    & $InstallerScript @installerArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-$sizeMB = [math]::Round((Get-Item -LiteralPath $exePath).Length / 1MB, 1)
-Write-Host ""
-Write-Host "产物: $exePath ($sizeMB MB, v$version)" -ForegroundColor Green
-Write-Host "发布包: .\build.ps1 -Release" -ForegroundColor DarkGray
+
+if (-not $Release) {
+    $distDir = if ($OutputDir) { $OutputDir } else { Join-Path $ScriptDir "dist" }
+    $exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "omni.exe" } else { "omni" }
+    $exePath = Join-Path $distDir $exeName
+    if (Test-Path -LiteralPath $exePath) {
+        $sizeMB = [math]::Round((Get-Item -LiteralPath $exePath).Length / 1MB, 1)
+        Write-Host ""
+        Write-Host "产物: $exePath ($sizeMB MB, v$version)" -ForegroundColor Green
+        if (-not $Installer) {
+            Write-Host "发布包: .\build.ps1 -Release   安装包: .\build.ps1 -Installer" -ForegroundColor DarkGray
+        }
+    }
+}
