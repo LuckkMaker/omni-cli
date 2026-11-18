@@ -17,6 +17,7 @@ from . import modules
 from . import pack
 from . import probe
 from . import rtt
+from . import serial
 from . import system
 from . import target
 from . import tool
@@ -37,6 +38,7 @@ _MODULES = (
     pack,
     probe,
     rtt,
+    serial,
     system,
     target,
     tool,

@@ -5,16 +5,13 @@ device run|halt|reset|state。
 """
 
 import base64
-import codecs
-import json
 import os
-import sys
-import time
 
 from ..client import ApiClient
 from ..formatting import render_table
 from ..options import common_parser
 from ..runtime import finish, run_command
+from ._stream import run_cursor_stream
 from ..util import parse_int, resolve_uid
 
 
@@ -64,8 +61,11 @@ def add_parser(sub):
     s.add_argument("--duration", type=float, default=0.0,
                    help="follow 持续秒数（默认 0=一直跟踪到 Ctrl+C）")
     s.add_argument("--out", metavar="FILE", help="把原始字节追加写入文件（二进制）")
-    s.add_argument("--encoding", default="utf-8",
-                   help="文本解码编码（默认 utf-8；非法字节用替换符，--json 的 base64 无损）")
+    s.add_argument("--encoding", default=None, metavar="ENC",
+                   help="按指定编码解码显示（默认原始字节直写 stdout；"
+                        "非法字节用替换符，--json 的 base64 无损）")
+    s.add_argument("--hex", action="store_true",
+                   help="以十六进制转储显示（偏移 + 十六进制 + ASCII）")
     s.set_defaults(func=run_command(_read))
 
     s = ps.add_parser("send", parents=[common_parser()], help="发送二进制数据到 down channel")
@@ -158,122 +158,25 @@ def _read(c: ApiClient, args):
     """读取 RTT 上行缓存：一次性打印/落盘，或 --follow 持续跟踪。
 
     - 与 GUI 共用后端的同一份环形缓存，不消费服务端游标，多客户端互不影响。
-    - 文本模式用增量解码器，避免多字节字符跨块被切坏；--json 保留 base64 原始块，
-      CI 可无损断言。
+    - 默认原始字节直写 stdout；--encoding 按增量解码器显示（多字节字符跨批
+      不切坏）；--json 保留 base64 原始块，CI 可无损断言。
+    - 通用循环见 commands/_stream.py（rtt / serial / net 共用）。
     """
     uid = _require_uid(c, args)
-    if args.follow and args.json_ and args.quiet:
-        print("错误: --quiet 与 --json --follow 不能同时使用（JSONL 需要输出）。", file=sys.stderr)
-        return 2
-    if args.max_bytes < 1:
-        print("错误: --max-bytes 必须 ≥ 1。", file=sys.stderr)
-        return 2
-    if args.follow and args.interval < 0.05:
-        args.interval = 0.05
+    channel = args.channel
 
-    decoder = None
-    if not args.json_:
-        try:
-            decoder = codecs.getincrementaldecoder(args.encoding)(errors="replace")
-        except LookupError:
-            print(f"错误: 不支持的编码: {args.encoding}", file=sys.stderr)
-            return 2
+    def _fetch(since: int, max_bytes: int) -> dict:
+        query = f"since={since}&max_bytes={max_bytes}"
+        if channel is not None:
+            query += f"&channel={int(channel)}"
+        return c.get(f"/api/probes/{uid}/rtt/data?{query}")
 
-    out = None
-    if args.out:
-        try:
-            out = open(args.out, "ab")
-        except OSError as e:
-            print(f"错误: 无法打开输出文件 {args.out}: {e}", file=sys.stderr)
-            return 1
-
-    since = max(0, int(args.since or 0))
-    deadline = time.time() + args.duration if (args.follow and args.duration > 0) else None
-    printed_any = False
-    tail = ""
-    read_any = False
-    follow = bool(args.follow)
-    session_reset_warned = False
-
-    try:
-        while True:
-            query = f"since={since}&max_bytes={int(args.max_bytes)}"
-            if args.channel is not None:
-                query += f"&channel={int(args.channel)}"
-            data = c.get(f"/api/probes/{uid}/rtt/data?{query}")
-            chunks = data.get("chunks") or []
-            raw = b"".join(base64.b64decode(ch.get("data") or "") for ch in chunks)
-            read_any = read_any or bool(raw)
-
-            if out is not None and raw:
-                out.write(raw)
-                out.flush()
-
-            # 警告的处理必须区分输出模式：
-            # - --json：绝不写 stderr（调用方常把 2>&1 合并捕获，会把警告混进 JSON），
-            #   改为放进 JSON 的 warning 字段，stdout 始终是纯 JSON/JSONL。
-            # - 人类可读模式：警告写 stderr，不污染正文。
-            warnings: list[str] = []
-            if data.get("session_reset") and not session_reset_warned:
-                # --since 超出当前后端进程的序号（通常是后端重启后 seq 从 1 开始）
-                warnings.append("指定的 --since 超出当前后端进程的 RTT 序号"
-                                "（后端重启后 seq 从 1 开始），已从当前缓存最旧数据读取。")
-                session_reset_warned = True
-            if data.get("lost"):
-                warnings.append("RTT 环形缓存已覆盖部分历史数据（lost），如需完整日志请及时 --follow。")
-
-            if warnings and not args.json_ and not args.quiet:
-                for warning in warnings:
-                    print(f"警告: {warning}", file=sys.stderr)
-
-            if args.json_:
-                # follow 模式：有数据/有警告时才输出一行，避免空行刷屏；
-                # 非 follow 模式：即使没有数据也输出一个完整对象。
-                if raw or warnings or not follow:
-                    payload = {k: v for k, v in data.items() if k != "chunks"}
-                    payload["chunks"] = chunks
-                    if warnings:
-                        payload["warning"] = "；".join(warnings)
-                    if not args.quiet:
-                        # follow 模式输出 JSONL（每批一行），便于流式消费
-                        print(json.dumps(payload, ensure_ascii=False, indent=None if follow else 2))
-            elif raw and not args.quiet:
-                text = decoder.decode(raw)
-                if text:
-                    sys.stdout.write(text)
-                    sys.stdout.flush()
-                    printed_any = True
-                    tail = text[-1:]
-
-            since = int(data.get("cursor", since))
-            if not follow:
-                break
-            if deadline is not None and time.time() >= deadline:
-                break
-            time.sleep(args.interval)
-    except KeyboardInterrupt:
-        # follow 是无限流，Ctrl+C 是正常结束方式
-        pass
-    finally:
-        if out is not None:
-            out.close()
-
-    if not args.json_ and not args.quiet:
-        if not read_any:
-            print("（暂无 RTT 数据：确认固件已初始化 SEGGER RTT 并产生输出，"
-                  "或先执行 `omni rtt start`）", file=sys.stderr)
-        else:
-            # 刷出增量解码器可能残留的半个多字节字符
-            rest = decoder.decode(b"", final=True) if decoder is not None else ""
-            if rest:
-                sys.stdout.write(rest)
-                tail = rest[-1:]
-            if tail not in ("", "\n"):
-                sys.stdout.write("\n")
-            sys.stdout.flush()
-    if out is not None and not args.json_ and not args.quiet:
-        print(f"已追加写入: {args.out}", file=sys.stderr)
-    return 0
+    return run_cursor_stream(
+        args, _fetch,
+        subject="RTT",
+        empty_hint="（暂无 RTT 数据：确认固件已初始化 SEGGER RTT 并产生输出，"
+                   "或先执行 `omni rtt start`）",
+    )
 
 
 def _send(c: ApiClient, args):

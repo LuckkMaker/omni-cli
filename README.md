@@ -8,11 +8,13 @@
 
 ## 定位
 
-OMNI CLI 有两类命令：
+OMNI CLI 的命令分三类（`omni --help` 也按此分组显示）：
 
 - **调试/烧录类**：`backend` / `probe` / `target` / `flash` / `commander` / `debug` / `monitor` / `device` / `pack` / `rtt` / `system` / `file` / `tool`。
-  它们是 OMNI Link 后端的瘦客户端，通过 HTTP 复用 REST 接口，不复制后端业务逻辑。
+  它们是 link 后端的瘦客户端，通过 HTTP 复用 REST 接口，不复制后端业务逻辑。
   （例外：`file checksum` 纯本地计算，不需要后端。）
+- **总线工具类**：`serial`（后续 `net`）。bus 后端的瘦客户端，命令组默认路由到
+  bus 服务（`--service` 可覆盖），收发共用 GUI 串口页的同一后端实例与接收环形缓存。
 - **工程配置/构建类**：`omni config`、`omni build`、`omni toolchain`。本地执行，
   不经过后端，实现在 `omni_cli.config` / `omni_cli.builder` / `omni_cli.toolchain` 内；
   只依赖 omni-emb 仓库的 `Kconfig` / `soc` / `boards` 数据和本机工具链。
@@ -413,6 +415,11 @@ omni backend stop
 
 ## 命令参考
 
+> **行为变更（0.25.0）**：`rtt read` 默认改为**原始字节直写 stdout**（与
+> `serial read` 一致，管道/重定向无损）；按文本解码显示改为显式
+> `--encoding utf-8`。`--json` 的 base64 与 `--out` 落盘不受影响。
+
+
 ### `backend` — 后端生命周期（link / bus 两个服务）
 
 OMNI 平台有两个独立后端服务，各自是独立进程、独立登记表：
@@ -448,6 +455,32 @@ omni backend stop bus
 
 启动失败时会打印后端 stderr 末尾（例如缺 `pymodbus`），并提示安装对应 GUI 或设置
 `OMNI_BUS_STATE_DIR`；装了 GUI 的机器会自动复用其 `resources/python/` 里的后端。
+
+### `serial` — 串口收发（bus 服务）
+
+| 子命令 | 说明 |
+| --- | --- |
+| `ports` | 枚举主机串口（COM 口），含 VID:PID 与厂商 |
+| `open` | 打开串口：`--port` 必填；`--baud/--bytesize/--parity/--stopbits/--flow/--rts/--dtr` 配置线路参数；`--id` 指定连接实例（默认 `cli`，多口并行各自指定） |
+| `send` | 发送数据：`--text`（默认补换行，`--no-newline` 关闭）/ `--hex` / `--file` 三选一 |
+| `read` | 读取接收缓冲：默认原始字节直写 stdout；`--since` 游标续读、`--wait MS` 同步等读（AT 命令式）、`--follow` 持续跟踪、`--encoding` 解码显示、`--hex` 十六进制转储、`--out FILE` 落盘、`--json` base64 无损 |
+| `status` | 串口开合状态 + 接收缓冲统计（oldest_seq / next_seq / dropped） |
+| `close` | 关闭串口；接收缓存保留，仍可 `read` 回看 |
+| `update` | 在线更新参数（`--baud / --rts / --no-rts / --dtr / --no-dtr`），无需关闭重开 |
+
+```powershell
+omni serial ports
+omni serial open --port COM3 --baud 115200
+omni serial send --text "AT+GMR"
+omni serial read --wait 500                 # 等 500ms 内到达的响应
+omni serial read --follow --out rx.bin      # 持续接收并落盘
+omni serial close
+```
+
+数据链路与 GUI 串口页共用同一后端实例与接收环形缓存（1 MiB，溢出丢最旧整批并经
+`lost` 告知）；seq 游标跨串口重开单调递增，多客户端（GUI + CLI）互不影响。
+CLI 收不到数据时先确认：对端已在发送、波特率/校验位匹配、`serial status` 里
+`buffered_bytes` 在增长。
 
 ### `system` — 系统信息
 
