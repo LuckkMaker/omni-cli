@@ -818,10 +818,12 @@ def _test_list(c: ApiClient, args):
     finish(
         args,
         data,
-        "用例格式（M4a：离线 pcap + expect 断言）:\n"
+        "用例格式（离线 pcap 断言 / 真机动作）:\n"
         + json.dumps(example, ensure_ascii=False, indent=2)
-        + "\n\n可用断言: transfers / transfer / device / errors / descriptor\n"
-        "动作步骤（control/write/read/echo）需要 usb_host（M4b）。\n"
+        + "\n\n离线断言: transfers / transfer / device / errors / descriptor\n"
+        "真机动作: open / control / write / read / echo / close（"
+        "device.channel = winusb | hid | cdc）\n"
+        "动作返回值断言: ok / length / minLength / hex / hexStartsWith / mismatches / bytesWritten\n"
         "示例: omni usb test run --file case.json --junit report.xml",
     )
     return 0

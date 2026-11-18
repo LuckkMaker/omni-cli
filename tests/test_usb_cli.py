@@ -439,10 +439,16 @@ def main() -> int:
 
     code, out, _ = capture(
         usb_cmd._test_list,
-        StubClient({"/api/usb/test/schema": {"example": {"name": "demo", "steps": []}}}),
+        StubClient(
+            {
+                "/api/usb/test/schema": {
+                    "example": {"live": {"name": "winusb-echo-smoke", "steps": []}}
+                }
+            }
+        ),
         ns(),
     )
-    check("test list 显示用例格式", code == 0 and "demo" in out, out)
+    check("test list 显示用例格式", code == 0 and "winusb-echo-smoke" in out, out)
 
     # ── 2e. cdc（复用串口后端） ──────────────────────────
     ports = {
