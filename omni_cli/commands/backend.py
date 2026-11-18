@@ -11,6 +11,7 @@
 
 import time
 
+from .. import __version__ as CLI_VERSION
 from .. import client as bclient
 from .. import settings
 from ..formatting import ctx_error
@@ -223,6 +224,7 @@ def _status(args):
     if args.json_:
         import json
         payload = {
+            "cliVersion": CLI_VERSION,
             "running": alive,
             "hung": main["hung"],
             "pid": main["pid"],
@@ -235,6 +237,7 @@ def _status(args):
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0 if alive else 1
 
+    print(f"CLI    omni {CLI_VERSION}")
     print(_format_state(main))
     for item in extra:
         print(_format_state(item))
@@ -267,8 +270,10 @@ def _list(args):
         return 0 if alive else 1
     if args.json_:
         import json
-        print(json.dumps({"services": states, "running": alive}, ensure_ascii=False, indent=2))
+        print(json.dumps({"cliVersion": CLI_VERSION, "services": states, "running": alive},
+                         ensure_ascii=False, indent=2))
         return 0 if alive else 1
+    print(f"CLI    omni {CLI_VERSION}")
     for item in states:
         print(_format_state(item))
     return 0 if alive else 1

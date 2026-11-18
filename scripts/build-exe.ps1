@@ -1,11 +1,11 @@
-﻿<#
+<#
 .SYNOPSIS
     构建单文件 OMNI CLI 可执行文件（omni.exe）。
 
 .DESCRIPTION
     用 PyInstaller 把 `omni_cli` 打成单文件 console exe，输出到 <repo>\dist\omni.exe。
-    omni-link 安装包只消费这个产物（extraResources: resources/python/omni.exe），
-    因此本脚本是 CLI 与宿主应用之间唯一的构建契约。
+    发布包（portable zip / 独立安装脚本）消费这个产物；OMNI Link / OMNI Bus 不再内置 CLI，
+    因此本脚本只属于 CLI 自己的发布链路。
 
 .PARAMETER Python
     指定解释器；默认优先仓库根 .venv，其次 PATH 上的 python。

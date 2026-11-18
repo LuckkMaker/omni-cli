@@ -10,7 +10,7 @@
       4. 生成 SHA256SUMS.txt
 
 .PARAMETER OutputDir
-    输出目录。默认：python/dist/cli-release
+    输出目录。默认：dist/cli-release
 
 .PARAMETER Clean
     打包前清理输出目录。

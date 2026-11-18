@@ -2,9 +2,8 @@
 
 把 OMNI Link 的调试能力（探针、烧录、RTT、设备库、Commander）和 OMNI 工程配置能力统一到一个命令行入口，便于脚本化、CI 与自动化测试。
 
-> 本仓库是独立项目：OMNI Link 以 git submodule 形式把它挂在 `vendor/omni-cli/`，
-> 安装包里的 `resources/python/omni.exe` 由本仓库的 `scripts/build-exe.ps1` 产出。
-> 调试/烧录命令仍然通过 HTTP 调用 OMNI Link 的 Python 后端。
+> 本仓库是独立项目：OMNI Link / OMNI Bus **不再内置** CLI，`omni` 由本仓库单独
+> 安装（portable zip / wheel / 安装脚本）。调试/烧录命令仍通过 HTTP 调用后端。
 
 ## 定位
 
@@ -276,7 +275,7 @@ omni (本包)
 
 ## 安装
 
-本仓库可单独克隆使用，也可作为 OMNI Link 的 submodule（`vendor/omni-cli/`）。
+本仓库可单独克隆使用；GUI（OMNI Link / OMNI Bus）不再把它作为 submodule 内置。
 
 ### 方式一：wheel 安装（推荐，日常开发）
 
@@ -358,11 +357,23 @@ zip 内包含 `omni.exe`、`README.md`、`LICENSE`、`install.ps1`、`uninstall.
 > portable zip 不包含调试后端；`omni config` 可独立使用，`probe/flash/debug/rtt`
 > 需要已安装的 OMNI Link 后端或 `OMNI_BACKEND_DIR`/`OMNI_BACKEND_SERVER`。
 
-### 方式四：作为 OMNI Link 的 submodule 集成
+### 方式四：GUI 集成（已取消内置）
 
-OMNI Link 在构建安装包前调用本仓库的 `scripts/build-exe.ps1`，把 `dist/omni.exe`
-拷到 `python/dist/omni.exe`，由 `extraResources` 打进 `resources/python/omni.exe`
-并由 NSIS 安装脚本加入用户 PATH。CLI 版本由 submodule commit 固定。
+OMNI Link / OMNI Bus **不再内置** CLI：安装包只带各自后端，`omni` 由本仓库
+单独安装（portable zip / wheel / 独立安装脚本）。
+
+## 构建与发布
+
+```powershell
+.\build.ps1                 # 只构建 dist\omni.exe（PyInstaller 单文件）
+.\build.ps1 -Release        # 发布包：exe + wheel + portable zip + SHA256（可签名）
+.\build.ps1 -Release -Clean -PfxPath .\certs\omni.pfx
+.\build.ps1 -Plan           # 只打印将执行的命令，不构建
+```
+
+`build.ps1` 只是编排，实际工作在 `scripts/build-exe.ps1`（exe）与
+`scripts/cli-release.ps1`（发布包）。GUI（OMNI Link / OMNI Bus）不再内置 CLI，
+由本仓库的安装包或 `scripts/cli-install/install.ps1` 单独安装。
 
 ## 快速开始
 
