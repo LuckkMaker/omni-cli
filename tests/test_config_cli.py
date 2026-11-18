@@ -404,6 +404,8 @@ def test_cmake_sources(root: Path) -> None:
     from omni_cli.config.cmake_sources import group_for_path
 
     check("omni/drivers 目录映射", group_for_path("omni/drivers/disk") == "omni/driver")
+    check("omni/lib 目录映射", group_for_path("omni/lib") == "omni/lib")
+    check("omni/lib 子目录映射", group_for_path("omni/lib/rb") == "omni/lib")
     check("omni/arch 目录映射", group_for_path("omni/arch/arm/core/cortex_m/src") == "omni/arch/arm")
     check("modules 目录映射", group_for_path("modules/coremark") == "module/coremark")
 

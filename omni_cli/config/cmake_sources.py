@@ -56,6 +56,10 @@ def group_for_path(rel_dir: str) -> str:
                 return "omni/subsys"
             if parts[1] == "drivers":
                 return "omni/driver"
+            if parts[1] == "lib":
+                # 基础库（libc 桩、ring_buffer、smf）：Keil 里和历史工程的
+                # ``omni/lib`` 组同名，不要再落到 omni/core 里和 device.c 混在一起。
+                return "omni/lib"
             if parts[1] == "arch" and len(parts) > 2:
                 return f"omni/arch/{parts[2]}"
             if parts[1] == "src":
