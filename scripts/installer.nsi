@@ -23,6 +23,14 @@ Unicode true
 !ifndef SCRIPT_DIR
   !define SCRIPT_DIR "."
 !endif
+!ifndef ICON_FILE
+  !define ICON_FILE "${SCRIPT_DIR}\..\assets\images\icon.ico"
+!endif
+
+; 安装器 / 卸载器图标（assets/images/icon.ico，由 icon.png 生成多尺寸）
+Icon "${ICON_FILE}"
+!define MUI_ICON "${ICON_FILE}"
+!define MUI_UNICON "${ICON_FILE}"
 
 !define CLI_BIN "$INSTDIR\bin"
 !define REG_APP "Software\OMNI\CLI"
