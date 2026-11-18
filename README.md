@@ -1248,6 +1248,18 @@ powershell -File scripts\cli-smoke.ps1 -UseInstalled -Rtt
 （或 `omni-link/vendor/omni-backend/link`）→ 旧布局 `omni-link\python`；都找不到时打印
 `SKIP` 而不是失败，因此 CI 不需要拉 omni-link。
 
+## 技能（skills）
+
+`skills/omni-cli/` 是「omni-cli 实机联调」技能的**源**（SKILL.md + 辅助脚本），
+`omni-emb/.agents/skills/omni-cli/` 是给 omni-emb 的 agent 用的同步副本。
+
+```powershell
+python scripts/sync-skill.py --check   # 检查副本是否漂移（提交前/CI）
+python scripts/sync-skill.py           # 同步到 ..\omni-emb\.agents\skills\omni-cli
+```
+
+默认目标可用 `--target` 覆盖；同步会删除目标里源中不存在的文件（忽略 `__pycache__`）。
+
 ## 常见问题
 
 **`错误: 未找到正在运行的后端`**
