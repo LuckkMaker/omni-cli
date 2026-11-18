@@ -635,7 +635,7 @@ omni debug periph regs GPIOE --filter ODR --json   # bit6 在 0x40/0x00 间跳�
 
 ## 相关
 
-- `D:\workspace\embedded\omni-cli\README.md` — CLI 完整命令参考与版本记录
+- `D:\workspace\embedded\omni-cli\README.md` — CLI 完整命令参考；版本历史见 `docs/changelog.md`
 - `D:\workspace\embedded\omni-backend\docs\protocol.md` — CLI ↔ 后端协议（服务发现 / 版本 / 流式游标）
 - `D:\workspace\embedded\omni-backend\docs\usb-plan.md` — USB 能力里程碑、真机验证记录与用例格式
 - `D:\workspace\embedded\omni-backend\docs\usb-raw-access.md` — 任意设备原始访问（UsbDk/自研驱动）的论证
