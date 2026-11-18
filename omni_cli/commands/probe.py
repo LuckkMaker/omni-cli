@@ -11,7 +11,7 @@ from ..util import parse_frequency, resolve_pack_paths
 
 
 def add_parser(sub):
-    p = sub.add_parser("probe", help="探针管理（枚举/连接/断开/状态/目标）")
+    p = sub.add_parser("probe", help="探针管理（列出/连接/断开/状态/目标）")
     ps = p.add_subparsers(dest="probe_sub", metavar="<sub>")
 
     s = ps.add_parser("list", parents=[common_parser()], help="列出所有已连接探针")
@@ -36,7 +36,7 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_connect))
 
     s = ps.add_parser("disconnect", parents=[common_parser()],
-                      help="断开指定探针（等待底层关闭，释放 J-Link 等探针句柄）")
+                      help="断开探针（等待底层关闭并释放 J-Link 等句柄）")
     s.add_argument("uid")
     s.set_defaults(func=run_command(_disconnect))
 

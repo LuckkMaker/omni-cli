@@ -7,7 +7,7 @@ from .. import toolchain
 
 def add_parser(sub):
     p = sub.add_parser("toolchain", help="显示 cmake/ninja/编译器/工具的解析来源")
-    p.add_argument("--json", dest="json_", action="store_true", help="输出 JSON")
+    p.add_argument("--json", dest="json_", action="store_true", help="输出 JSON（供脚本/CI 消费）")
     p.set_defaults(func=_run)
 
 

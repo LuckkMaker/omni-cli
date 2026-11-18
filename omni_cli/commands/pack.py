@@ -32,7 +32,7 @@ def add_parser(sub):
     s = ps.add_parser("import", parents=[common_parser()],
                       help="导入 .pack（持久安装，重启后端后仍生效）")
     s.add_argument("file", help=".pack 文件路径")
-    s.add_argument("--parts", help="只导入指定型号（逗号分隔；缺省=全部）")
+    s.add_argument("--parts", help="只导入指定型号（逗号分隔；默认=全部）")
     s.set_defaults(func=run_command(_import))
 
     s = ps.add_parser("remove", parents=[common_parser()], help="卸载已安装的 Pack")
@@ -112,7 +112,7 @@ def _import(c: ApiClient, args):
     if args.parts:
         selected = [p.strip() for p in args.parts.split(",") if p.strip()]
         if not selected:
-            print("错误: --parts 不能为空（缺省表示导入全部）")
+            print("错误: --parts 不能为空（默认表示导入全部）")
             return 1
 
     data = c.post("/api/packs/import", {"path": path, "selected_parts": selected})

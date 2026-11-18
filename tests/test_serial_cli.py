@@ -496,7 +496,7 @@ def _run_serial(func, c, args):
 
 def test_categorized_help():
     print("[11] 分类帮助覆盖全部命令")
-    from omni_cli.cli import COMMAND_CATEGORIES, build_parser, _CategorizedHelpFormatter
+    from omni_cli.cli import COMMAND_CATEGORIES, build_parser, _COMMAND_INDENT, _grouped_commands
     parser = build_parser()
     sub_action = next(a for a in parser._actions
                       if isinstance(a, argparse_SubParsersAction()))
@@ -505,13 +505,26 @@ def test_categorized_help():
     for _, members in COMMAND_CATEGORIES:
         listed |= set(members)
     check("所有命令都归入类别", names == listed, f"未分类: {sorted(names - listed)} 类别多余: {sorted(listed - names)}")
-    grouped = _CategorizedHelpFormatter._categorized(sub_action._choices_actions)
+    grouped = _grouped_commands(sub_action._choices_actions)
     grouped_names = {c.dest for c in grouped if c.help}
     check("分组结果不丢命令", grouped_names == names,
           f"丢失: {sorted(names - grouped_names)}")
     headers = [c.dest for c in grouped if not c.help]
     check("类别标题在前且有序", headers == [t for t, ms in COMMAND_CATEGORIES if set(ms) & names],
           str(headers))
+
+    # 渲染层：分组标题逐个出现，命令按类别落在标题之后，options 段收尾。
+    text = parser.format_help()
+    check("帮助渲染出全部类别标题", all(t in text for t in headers),
+          "缺失: %s" % [t for t in headers if t not in text])
+    name_w = max(len(c.dest) for c in grouped if c.help)
+    positions = [text.index(_COMMAND_INDENT + c.dest.ljust(name_w))
+                 for c in grouped if c.help]
+    check("命令顺序与分组一致", positions == sorted(positions))
+    check("命令块位于 options 段之前",
+          text.index(headers[0]) < text.index("options:"))
+    check("帮助不再输出 positionals 噪音", "positional arguments" not in text)
+    check("选项段仍完整", "--version" in text and "--help" in text)
 
 
 def argparse_SubParsersAction():

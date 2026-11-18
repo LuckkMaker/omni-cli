@@ -21,7 +21,7 @@ def add_parser(sub):
     p = sub.add_parser(
         "config",
         parents=[config_parser()],
-        help="工程构建配置（Kconfig/BSP/Keil 同步；本地执行，不依赖后端）",
+        help="工程构建配置（Kconfig/BSP/Keil 同步；本地执行）",
     )
     ps = p.add_subparsers(dest="config_sub", metavar="<sub>")
 

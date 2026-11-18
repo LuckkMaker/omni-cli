@@ -35,9 +35,9 @@ def _note_rtt_stopped(data: dict) -> None:
 def add_parser(sub):
     p = sub.add_parser("flash", help="Flash 烧录/擦除/校验/回读/填充/复位")
     ps = p.add_subparsers(dest="flash_sub", metavar="<sub>")
-    _uid_arg = lambda s: s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    _uid_arg = lambda s: s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
 
-    s = ps.add_parser("program", parents=[common_parser()], help="烧录固件（默认超时 180s）")
+    s = ps.add_parser("program", parents=[common_parser()], help="烧录固件")
     _uid_arg(s)
     s.add_argument("file", help="固件文件路径（hex/bin/elf）")
     s.add_argument("--no-verify", action="store_true", help="烧录后不校验")
@@ -47,7 +47,7 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_program), timeout=180)
 
     s = ps.add_parser("erase", parents=[common_parser()],
-                      help="擦除 Flash（默认超时 180s；操作前会自动停止 RTT）")
+                      help="擦除 Flash（操作前自动停止 RTT）")
     _uid_arg(s)
     s.add_argument("--type", default="chip", choices=["chip", "sector", "sector_range"],
                    help="擦除范围")
@@ -55,14 +55,14 @@ def add_parser(sub):
     s.add_argument("--size", help="大小（sector_range）")
     s.set_defaults(func=run_command(_erase), timeout=180)
 
-    s = ps.add_parser("verify", parents=[common_parser()], help="校验 Flash 与固件文件（默认超时 120s）")
+    s = ps.add_parser("verify", parents=[common_parser()], help="校验 Flash 与固件文件")
     _uid_arg(s)
     s.add_argument("file", help="固件文件路径")
     s.add_argument("--base-address", help="基地址")
     s.set_defaults(func=run_command(_verify), timeout=120)
 
     s = ps.add_parser("compare", parents=[common_parser()],
-                      help="对比目标内存/Flash 与文件，返回差异（默认超时 180s）")
+                      help="对比目标内存/Flash 与文件内容")
     _uid_arg(s)
     s.add_argument("file", help="固件文件路径（hex/bin/elf）")
     s.add_argument("--base-address", help="基地址（bin 文件）")
@@ -72,13 +72,13 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_compare), timeout=180)
 
     s = ps.add_parser("blank-check", parents=[common_parser()],
-                      help="检查 Flash 是否空白（默认超时 120s）")
+                      help="检查 Flash 是否空白")
     _uid_arg(s)
     s.add_argument("--addr", help="起始地址（默认 Flash 起始）")
     s.add_argument("--size", help="大小（默认整个 Flash）")
     s.set_defaults(func=run_command(_blank), timeout=120)
 
-    s = ps.add_parser("read", parents=[common_parser()], help="读取 Flash 内容（默认超时 120s）")
+    s = ps.add_parser("read", parents=[common_parser()], help="读取 Flash 内容")
     _uid_arg(s)
     s.add_argument("--type", default="chip", choices=["chip", "range"], help="读取范围")
     s.add_argument("--addr", help="起始地址（range）")
@@ -86,7 +86,7 @@ def add_parser(sub):
     s.add_argument("--out", metavar="PATH", help="后端侧保存路径（可选，另回 base64 数据）")
     s.set_defaults(func=run_command(_read), timeout=120)
 
-    s = ps.add_parser("fill", parents=[common_parser()], help="填充内存区域（Flash/RAM，默认超时 120s）")
+    s = ps.add_parser("fill", parents=[common_parser()], help="填充内存区域（Flash/RAM）")
     _uid_arg(s)
     s.add_argument("--addr", required=True, help="起始地址")
     s.add_argument("--size", required=True, help="大小")
@@ -99,7 +99,7 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_cancel))
 
     s = ps.add_parser("reset", parents=[common_parser()],
-                      help="复位目标（默认 hw + 复位后运行；--no-run 暂停，与 debug reset 相反）")
+                      help="复位目标（默认硬件复位后运行；--no-run 暂停）")
     _uid_arg(s)
     s.add_argument("--type", default="hw", choices=["hw", "sw"], help="复位类型")
     s.add_argument("--no-run", action="store_true", help="复位后停留在暂停态，不继续运行")

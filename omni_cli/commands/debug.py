@@ -32,18 +32,18 @@ def add_parser(sub):
     _uid(s)
     s.set_defaults(func=run_command(_halt))
 
-    s = ps.add_parser("run", parents=[common_parser()], help="继续运行（continue）")
+    s = ps.add_parser("run", parents=[common_parser()], help="继续运行")
     _uid(s)
     s.set_defaults(func=run_command(_run))
 
-    s = ps.add_parser("step", parents=[common_parser()], help="单步（源码级；无 DWARF 时回退指令级）")
+    s = ps.add_parser("step", parents=[common_parser()], help="单步执行（源码级；无 DWARF 时退化为指令级）")
     _uid(s)
     s.add_argument("--mode", choices=["into", "over", "out"], default="into",
                    help="into=进入(默认) / over=跳过 / out=跳出")
     s.set_defaults(func=run_command(_step))
 
     s = ps.add_parser("reset", parents=[common_parser()],
-                      help="复位目标（默认复位并暂停，与 flash reset 默认运行相反）")
+                      help="复位目标（默认复位并暂停；与 flash reset 相反）")
     _uid(s)
     s.add_argument("--mode", choices=["halt", "run", "break-symbol"], default="halt",
                    help="halt=复位暂停(默认) / run=复位运行 / break-symbol=复位运行并停在入口符号")
@@ -136,7 +136,7 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_regs))
 
     # ── 内存 ──────────────────────────────────
-    s = ps.add_parser("mem", help="内存查看")
+    s = ps.add_parser("mem", help="内存读写")
     sm = s.add_subparsers(dest="debug_mem_sub", metavar="<sub>")
 
     ss = sm.add_parser("read", parents=[common_parser()], help="读取内存并 hex dump")
@@ -182,13 +182,13 @@ def add_parser(sub):
     s.add_argument("--limit", type=int, default=200, help="每页数量（默认 200）")
     s.set_defaults(func=run_command(_functions))
 
-    s = ps.add_parser("callgraph", parents=[common_parser()], help="查看指定函数的直接被调函数（callees）")
+    s = ps.add_parser("callgraph", parents=[common_parser()], help="查看函数直接调用的函数（callees）")
     _uid(s)
     s.add_argument("--addr", required=True, help="函数地址（hex 或符号）")
     s.set_defaults(func=run_command(_callgraph))
 
     # ── 悬停 / Watch 求值 ─────────────────────
-    s = ps.add_parser("hover", parents=[common_parser()], help="悬停求值：函数地址 / 变量值")
+    s = ps.add_parser("hover", parents=[common_parser()], help="悬停求值（函数地址 / 变量值）")
     _uid(s)
     s.add_argument("name", help="标识符（函数名 / 变量名）")
     s.set_defaults(func=run_command(_hover))
@@ -1005,7 +1005,7 @@ def _session_del(c: ApiClient, args):
 # ── 辅助 ──────────────────────────────────
 
 def _uid(p):
-    p.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    p.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
 
 
 def _bp_locator(p):

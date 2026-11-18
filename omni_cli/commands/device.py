@@ -28,7 +28,7 @@ def add_parser(sub):
     s.add_argument("part", help="设备型号，如 G32F463XC")
     s.set_defaults(func=run_command(_info))
 
-    s = ps.add_parser("summary", parents=[common_parser()], help="各来源设备数量统计")
+    s = ps.add_parser("summary", parents=[common_parser()], help="按来源统计设备数量")
     s.set_defaults(func=run_command(_summary))
 
     s = ps.add_parser("create", parents=[common_parser()], help="按 JSON 新增设备（写入用户库）")

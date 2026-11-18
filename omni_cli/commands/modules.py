@@ -30,7 +30,7 @@ def add_parser(sub):
                    help="omni 框架根目录（默认从当前目录向上查找）")
     s.set_defaults(func=_run(_list))
 
-    s = ps.add_parser("check", parents=[local_parser()], help="检查模块声明是否自洽")
+    s = ps.add_parser("check", parents=[local_parser()], help="检查模块声明是否一致")
     s.add_argument("--omni-root", default=None, metavar="PATH",
                    help="omni 框架根目录（默认从当前目录向上查找）")
     s.set_defaults(func=_run(_check))

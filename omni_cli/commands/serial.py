@@ -4,6 +4,7 @@
 CLI 按 seq 游标增量拉取（`--follow` 持续跟踪），多客户端互不影响。
 """
 
+import argparse
 import base64
 import os
 import sys
@@ -16,10 +17,10 @@ from ._stream import run_cursor_stream
 
 
 def add_parser(sub):
-    p = sub.add_parser("serial", help="串口收发（枚举 / 打开 / 发送 / 接收缓冲读取；bus 服务）")
+    p = sub.add_parser("serial", help="串口收发（列出 / 打开 / 发送 / 接收缓冲读取；bus 服务）")
     ps = p.add_subparsers(dest="serial_sub", metavar="<sub>")
 
-    s = ps.add_parser("ports", parents=[common_parser()], help="枚举主机串口（COM 口）")
+    s = ps.add_parser("ports", parents=[common_parser()], help="列出主机串口（COM 口）")
     s.set_defaults(func=run_command(_ports))
 
     s = ps.add_parser("open", parents=[common_parser()], help="打开串口")
@@ -40,7 +41,7 @@ def add_parser(sub):
     s.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
     s.set_defaults(func=run_command(_status))
 
-    s = ps.add_parser("close", parents=[common_parser()], help="关闭串口（接收缓存保留，仍可 read 回看）")
+    s = ps.add_parser("close", parents=[common_parser()], help="关闭串口（接收缓存保留，仍可继续读取）")
     s.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
     s.set_defaults(func=run_command(_close))
 
@@ -55,10 +56,12 @@ def add_parser(sub):
     s = ps.add_parser(
         "read", parents=[common_parser()],
         help="读取接收缓冲（一次性 / --wait 同步等读 / --follow 持续跟踪）",
-        epilog="示例: omni serial read --id cli                # 读取当前已接收数据\n"
-               "      omni serial read --wait 500              # 等待 500ms 内到达的数据\n"
-               "      omni serial read --follow --out rx.bin    # 持续接收并落盘\n"
-               "      omni serial send --text AT && omni serial read --wait 300",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n"
+               "  omni serial read --id cli                # 读取当前已接收数据\n"
+               "  omni serial read --wait 500              # 等待 500ms 内到达的数据\n"
+               "  omni serial read --follow --out rx.bin   # 持续接收并落盘\n"
+               "  omni serial send --text AT && omni serial read --wait 300",
     )
     s.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
     s.add_argument("--since", type=int, default=None,
@@ -82,7 +85,7 @@ def add_parser(sub):
                    help="以十六进制转储显示（偏移 + 十六进制 + ASCII）")
     s.set_defaults(func=run_command(_read))
 
-    s = ps.add_parser("record", help="后端侧录制（关掉终端仍继续，字节完整落盘）")
+    s = ps.add_parser("record", help="录制接收数据（后端执行，关掉终端仍继续）")
     rs = s.add_subparsers(dest="serial_record_sub", metavar="<sub>")
 
     t = rs.add_parser("start", parents=[common_parser()], help="开始录制接收数据到文件")

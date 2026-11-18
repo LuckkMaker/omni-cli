@@ -22,22 +22,22 @@ def add_parser(sub):
     ps = p.add_subparsers(dest="monitor_sub", metavar="<sub>")
 
     s = ps.add_parser("status", parents=[common_parser()], help="查询 Monitor 状态")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_status))
 
-    elf = ps.add_parser("elf", help="Monitor 的 ELF/符号")
+    elf = ps.add_parser("elf", help="Monitor 的 ELF 与符号")
     es = elf.add_subparsers(dest="monitor_elf_sub", metavar="<sub>")
     s = es.add_parser("load", parents=[common_parser()], help="加载 ELF/AXF 并解析符号")
     s.add_argument("file", help="ELF/AXF 文件路径")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_elf_load))
     s = es.add_parser("changed", parents=[common_parser()], help="检测已加载 ELF 是否变化")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_elf_changed))
     elf.set_defaults(func=run_command(_usage("monitor elf <load|changed>")))
 
     s = ps.add_parser("symbols", parents=[common_parser()], help="查询 ELF 符号（分页）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--filter", default="", help="名称子串过滤")
     s.add_argument("--type", default="object", choices=["object", "func", "all"],
                    help="符号类型（默认 object=仅变量）")
@@ -45,13 +45,13 @@ def add_parser(sub):
     s.add_argument("--page-size", type=int, default=200)
     s.set_defaults(func=run_command(_symbols))
 
-    var = ps.add_parser("var", help="监视变量管理")
+    var = ps.add_parser("var", help="监视变量（列出/添加/移除/写入）")
     vs = var.add_subparsers(dest="monitor_var_sub", metavar="<sub>")
     s = vs.add_parser("list", parents=[common_parser()], help="列出监视变量")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_var_list))
     s = vs.add_parser("add", parents=[common_parser()], help="添加监视变量（符号或地址）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--symbol", help="按 ELF 符号名添加（与 --name/--address/--type 互斥）")
     s.add_argument("--name", help="变量名（手工地址模式必填）")
     s.add_argument("--address", help="变量地址（hex/dec；手工地址模式必填）")
@@ -62,17 +62,17 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_var_add))
     s = vs.add_parser("rm", parents=[common_parser()], help="移除监视变量")
     s.add_argument("var_id", help="变量 ID（`monitor var list` 查看）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_var_rm))
     s = vs.add_parser("set", parents=[common_parser()], help="写入变量值（目标内存）")
     s.add_argument("var_id", help="变量 ID")
     s.add_argument("--value", required=True, help="新值（hex/dec）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_var_set))
     var.set_defaults(func=run_command(_usage("monitor var <list|add|rm|set>")))
 
     s = ps.add_parser("start", parents=[common_parser()], help="启动采样")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--rate", type=float, default=1000.0, help="采样率 Hz（默认 1000）")
     s.add_argument("--max-points", type=int, default=300000, help="最大采样点数")
     s.add_argument("--transport", default="swd", choices=["swd", "rtt"],
@@ -81,7 +81,7 @@ def add_parser(sub):
 
     for name, help_ in (("stop", "停止采样"), ("pause", "暂停采样"), ("resume", "恢复采样")):
         s = ps.add_parser(name, parents=[common_parser()], help=help_)
-        s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+        s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
         s.set_defaults(func=run_command(_control(name)))
 
     dev = ps.add_parser("device", help="目标内核控制（run/halt/reset/state）")
@@ -89,16 +89,16 @@ def add_parser(sub):
     for name, help_ in (("run", "运行目标内核"), ("halt", "暂停目标内核"),
                         ("state", "查询内核状态（running/halted）")):
         s = ds.add_parser(name, parents=[common_parser()], help=help_)
-        s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+        s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
         s.set_defaults(func=run_command(_device(name)))
     s = ds.add_parser("reset", parents=[common_parser()], help="复位目标内核")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--no-run", action="store_true", help="复位后停留在暂停态")
     s.set_defaults(func=run_command(_device_reset))
     dev.set_defaults(func=run_command(_usage("monitor device <run|halt|reset|state>")))
 
     s = ps.add_parser("read", parents=[common_parser()], help="读取落盘采样数据")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--start-ms", type=float, help="起始时间（相对采样起点，ms）")
     s.add_argument("--end-ms", type=float, help="结束时间（ms）")
     s.add_argument("--limit", type=int, default=200,
@@ -109,9 +109,9 @@ def add_parser(sub):
     s.add_argument("--duration", type=float, default=0, help="follow 持续秒数（0=一直）")
     s.set_defaults(func=run_command(_read))
 
-    s = ps.add_parser("export", parents=[common_parser()], help="导出 CSV（落盘数据，无上限）")
+    s = ps.add_parser("export", parents=[common_parser()], help="导出落盘数据为 CSV（无长度上限）")
     s.add_argument("out", help="输出 CSV 路径")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--mode", default="all", choices=["all", "recent", "custom"],
                    help="时间范围模式（默认 all）")
     s.add_argument("--recent", type=float, help="mode=recent 时最近 N 秒")

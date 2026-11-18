@@ -134,9 +134,9 @@ class BuildReporter:
         if self.quiet:
             return
         p = self.palette
-        print(f"{p('›', CYAN, BOLD)} {p('omni build', BOLD)}  {p(name, BOLD)}")
+        print(f"{p('omni build', BOLD)}  {p(name, BOLD)}")
         rows = (
-            ("board", f"{board} · {compiler} · {build_type}"),
+            ("board", f"{board} / {compiler} / {build_type}"),
             ("build", shorten_path(self.build_dir, self.project_dir)),
         )
         for key, value in rows:
@@ -161,8 +161,7 @@ class BuildReporter:
             text = text.replace(self.project_dir + os.sep, "." + os.sep)
             text = text.replace(self.project_dir, ".")
         label = "configure" if kind == "configure" else "build"
-        print(f"{self.palette('›', CYAN, BOLD)} {self.palette(label, CYAN)}  {text}",
-              flush=True)
+        print(f"{self.palette(label.ljust(9), CYAN)}  {text}", flush=True)
 
     # ------------------------------------------------------------ 实时日志
 
@@ -198,7 +197,7 @@ class BuildReporter:
         title = "配置完成" if configure_only else "构建完成"
         steps = f"  {result.steps} 步" if result.steps and not configure_only else ""
         print()
-        print(f"{p('✓', GREEN, BOLD)} {p(title, GREEN, BOLD)}{steps} · {seconds:.1f}s")
+        print(f"{p(title, GREEN, BOLD)}{steps}  {seconds:.1f}s")
 
         width = max([len(name) for name in result.artifacts] + [4])
         if result.size:
@@ -226,12 +225,11 @@ class BuildReporter:
         seconds = (result.configure_seconds or 0.0) + (result.build_seconds or 0.0)
         summary = summarize_failure("\n".join(result.log))
         title = "配置失败" if phase == "configure" else "构建失败"
-        detail = f"{summary['targets']} 个目标 · {seconds:.1f}s" if summary["targets"] else f"{seconds:.1f}s"
+        detail = f"{summary['targets']} 个目标  {seconds:.1f}s" if summary["targets"] else f"{seconds:.1f}s"
 
         print(file=sys.stderr)
         print(
-            f"{p('✗', RED, BOLD)} {p(title, RED, BOLD)}"
-            f"（exit {result.exit_code}）  {detail}",
+            f"{p(title, RED, BOLD)}（exit {result.exit_code}）  {detail}",
             file=sys.stderr,
         )
         if summary["first_error"]:

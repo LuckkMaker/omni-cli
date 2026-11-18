@@ -10,6 +10,7 @@
 ``--follow`` 持续跟踪），与 ``omni serial read`` 共用 commands/_stream.py。
 """
 
+import argparse
 import time
 
 from ..client import ApiClient
@@ -26,7 +27,7 @@ def add_parser(sub):
     ps = p.add_subparsers(dest="net_sub", metavar="<sub>")
 
     # ── 本机信息 ──
-    s = ps.add_parser("interfaces", parents=[common_parser()], help="枚举本机 IPv4 地址")
+    s = ps.add_parser("interfaces", parents=[common_parser()], help="列出本机 IPv4 地址与主机名")
     s.set_defaults(func=run_command(_interfaces))
 
     # ── TCP Server ──
@@ -42,24 +43,24 @@ def add_parser(sub):
     t.set_defaults(func=run_command(_ts_stop))
 
     t = ss.add_parser("status", parents=[common_parser()],
-                      help="状态 + 已连接客户端（含收发字节数）")
+                      help="查询状态与已连接客户端（含收发字节数）")
     t.set_defaults(func=run_command(_ts_status))
 
     t = ss.add_parser("send", parents=[common_parser()],
-                      help="向客户端发送（--target 指定 id，缺省广播）")
+                      help="向客户端发送（--target 指定 id，默认广播）")
     t.add_argument("--text", metavar="TEXT", help="发送文本（默认追加换行）")
     t.add_argument("--hex", metavar="HEX", help="发送十六进制字节")
     t.add_argument("--file", metavar="PATH", help="发送文件原始字节")
     t.add_argument("--no-newline", action="store_true", help="--text 不追加换行")
     t.add_argument("--target", action="append", metavar="ID",
-                   help="目标客户端 id（可重复；缺省广播给全部）")
+                   help="目标客户端 id（可重复；默认广播给全部）")
     t.set_defaults(func=run_command(_ts_send))
 
     t = ss.add_parser("kick", parents=[common_parser()], help="断开指定客户端")
     t.add_argument("--id", required=True, metavar="ID", help="客户端 id（见 status）")
     t.set_defaults(func=run_command(_ts_kick))
 
-    t = ss.add_parser("echo", parents=[common_parser()], help="开/关服务端回显（收到即原样回送）")
+    t = ss.add_parser("echo", parents=[common_parser()], help="开启/关闭服务端回显（收到即原样回送）")
     t.add_argument("state", choices=("on", "off"), help="on 开启 / off 关闭")
     t.set_defaults(func=run_command(_ts_echo))
 
@@ -69,7 +70,7 @@ def add_parser(sub):
     x.add_argument("--hex", required=True, metavar="HEX", help="定时发送的十六进制载荷")
     x.add_argument("--interval", type=int, default=1000, metavar="MS", help="发送间隔毫秒（默认 1000）")
     x.add_argument("--target", action="append", metavar="ID",
-                   help="目标客户端 id（可重复；缺省广播）")
+                   help="目标客户端 id（可重复；默认广播）")
     x.set_defaults(func=run_command(_ts_auto_start))
     x = a.add_parser("stop", parents=[common_parser()], help="停止定时发送（返回发送/失败计数）")
     x.set_defaults(func=run_command(_ts_auto_stop))
@@ -86,7 +87,7 @@ def add_parser(sub):
     t = ss.add_parser("disconnect", parents=[common_parser()], help="断开连接")
     t.set_defaults(func=run_command(_tc_disconnect))
 
-    t = ss.add_parser("status", parents=[common_parser()], help="连接状态与收发统计")
+    t = ss.add_parser("status", parents=[common_parser()], help="查询连接状态与收发统计")
     t.set_defaults(func=run_command(_tc_status))
 
     t = ss.add_parser("send", parents=[common_parser()], help="向服务器发送数据")
@@ -117,7 +118,7 @@ def add_parser(sub):
     t = ss.add_parser("stop", parents=[common_parser()], help="停止接收")
     t.set_defaults(func=run_command(_udp_stop))
 
-    t = ss.add_parser("status", parents=[common_parser()], help="状态与收发统计")
+    t = ss.add_parser("status", parents=[common_parser()], help="查询状态与收发统计")
     t.set_defaults(func=run_command(_udp_status))
 
     t = ss.add_parser("send", parents=[common_parser()], help="发送数据报到目标地址")
@@ -129,7 +130,7 @@ def add_parser(sub):
     t.add_argument("--no-newline", action="store_true", help="--text 不追加换行")
     t.set_defaults(func=run_command(_udp_send))
 
-    t = ss.add_parser("echo", parents=[common_parser()], help="开/关回声（收到即回给来源）")
+    t = ss.add_parser("echo", parents=[common_parser()], help="开启/关闭回声（收到即回给来源）")
     t.add_argument("state", choices=("on", "off"), help="on 开启 / off 关闭")
     t.set_defaults(func=run_command(_udp_echo))
 
@@ -188,10 +189,12 @@ def add_parser(sub):
     # ── 接收缓冲读取（三种角色共用） ──
     s = ps.add_parser(
         "read", parents=[common_parser()],
-        help="读取接收缓冲（--kind 选角色；一次性 / --wait 同步等读 / --follow 跟踪）",
-        epilog="示例: omni net read --kind tcp-server --peer 192.168.1.101:52036\n"
-               "      omni net read --kind tcp-client --wait 500 --hex\n"
-               "      omni net read --kind udp --follow --out rx.bin",
+        help="读取接收缓冲（--kind 选择角色；一次性 / 同步等读 / 持续跟踪）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n"
+               "  omni net read --kind tcp-server --peer 192.168.1.101:52036\n"
+               "  omni net read --kind tcp-client --wait 500 --hex\n"
+               "  omni net read --kind udp --follow --out rx.bin",
     )
     s.add_argument("--kind", default="tcp-client", choices=KINDS,
                    help="网络角色（默认 tcp-client）")

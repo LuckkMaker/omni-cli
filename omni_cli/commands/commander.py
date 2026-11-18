@@ -80,30 +80,30 @@ def add_parser(sub):
     ps = p.add_subparsers(dest="commander_sub", metavar="<sub>")
 
     s = ps.add_parser(
-        "exec", parents=[common_parser()], help="执行单条命令",
+        "exec", parents=[common_parser()], help="执行单条 pyOCD Commander 命令",
         epilog="已知全局选项（--uid/--backend-port/--timeout/--json/--managed/--quiet）"
                "写在命令之前或之后都可以（CLI 会自动前移）。"
                "列出 pyOCD 可用命令用 `omni commander exec help`；"
                "`omni commander exec list` 是 pyOCD 的探针/目标列表，不是命令列表。",
     )
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针；离线命令可省略）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针；离线命令可省略）")
     s.add_argument("command", nargs=argparse.REMAINDER, help="命令及其参数，如 read32 0x20000000 16")
     s.set_defaults(func=run_command(_exec))
 
     s = ps.add_parser("shell", parents=[common_parser()], help="进入交互式 REPL")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针；离线命令可省略）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针；离线命令可省略）")
     s.add_argument("--command", dest="batch", default="", metavar="CMD",
                    help="非交互执行给定命令后退出（可配合 ; 分隔多条）")
     s.set_defaults(func=run_command(_shell))
 
     s = ps.add_parser("reset", parents=[common_parser()],
-                      help="重置探针的 Commander 上下文（目标切换/重连后）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+                      help="重置 Commander 上下文（目标切换/重连后）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_reset))
 
     s = ps.add_parser("cancel", parents=[common_parser()],
-                      help="取消该探针上正在执行的 Commander 命令")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+                      help="取消正在执行的 Commander 命令")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_cancel))
 
 

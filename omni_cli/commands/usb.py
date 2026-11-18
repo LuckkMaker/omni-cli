@@ -428,6 +428,8 @@ def _capture_open(c: ApiClient, args):
         return 0
 
     deadline = time.monotonic() + 1800  # 解析大文件可能需要几分钟
+    # 进度只在终端里原地刷新；管道/重定向（CI、日志）下不输出，避免刷屏噪音。
+    show_progress = not args.quiet and sys.stderr.isatty()
     last_percent = -1
     try:
         while time.monotonic() < deadline:
@@ -436,8 +438,8 @@ def _capture_open(c: ApiClient, args):
                 break
             progress = status.get("progress") or {}
             percent = int(progress.get("percent", -1))
-            if not args.quiet and percent >= 0 and percent != last_percent:
-                print(f"\r解析中… {percent}%", end="", file=sys.stderr, flush=True)
+            if show_progress and percent >= 0 and percent != last_percent:
+                print(f"\r解析中 {percent}%", end="", file=sys.stderr, flush=True)
                 last_percent = percent
             time.sleep(0.2)
         else:
@@ -449,8 +451,8 @@ def _capture_open(c: ApiClient, args):
         if not args.quiet:
             print("\n已停止等待（后台解析继续）", file=sys.stderr)
         return 0
-    if not args.quiet and last_percent >= 0:
-        print("", file=sys.stderr)
+    if show_progress and last_percent >= 0:
+        print(file=sys.stderr)  # 结束原地刷新的那一行
 
     status = c.get("/api/usb/capture/status")
     if status.get("lastError"):
@@ -810,7 +812,7 @@ def _test_list(c: ApiClient, args):
         "真机动作: open / control / write / read / echo / close（"
         "device.channel = winusb | hid | cdc）\n"
         "动作返回值断言: ok / length / minLength / hex / hexStartsWith / mismatches / bytesWritten\n"
-        "示例: omni usb test run --file case.json --junit report.xml",
+        "Example: omni usb test run --file case.json --junit report.xml",
     )
     return 0
 
@@ -1601,7 +1603,7 @@ def add_parser(sub):
             "用 USBPcap 抓包分析、跑回归用例。"
         ),
         epilog=(
-            "示例:\n"
+            "Examples:\n"
             "  omni usb doctor\n"
             "  omni usb capture start --devices 1,2\n"
             "  omni usb capture transfers --follow\n"
@@ -1638,12 +1640,12 @@ def add_parser(sub):
     s.add_argument("--file", required=True, help="描述符文档路径")
     s.set_defaults(func=run_command(_desc_validate))
 
-    s = ds.add_parser("build", parents=[common_parser()], help="由 JSON 文档生成 hex")
+    s = ds.add_parser("build", parents=[common_parser()], help="由 JSON 描述生成 hex")
     s.add_argument("--file", required=True, help="描述符文档路径")
     s.add_argument("--out", metavar="FILE", help="输出文件（JSON 结果）")
     s.set_defaults(func=run_command(_desc_build))
 
-    s = ds.add_parser("emit", parents=[common_parser()], help="导出（hex / json）")
+    s = ds.add_parser("emit", parents=[common_parser()], help="导出描述符（hex / json）")
     s.add_argument("--file", required=True, help="描述符文档路径")
     s.add_argument("--format", choices=("hex", "json"), default="hex")
     s.add_argument("--out", metavar="FILE")
@@ -1655,7 +1657,7 @@ def add_parser(sub):
     s.add_argument("--device", type=int)
     s.set_defaults(func=run_command(_desc_from_capture))
 
-    t = ds.add_parser("template", help="内置模板")
+    t = ds.add_parser("template", help="内置描述符模板")
     ts = t.add_subparsers(dest="usb_template_sub", metavar="<sub>")
     s = ts.add_parser("list", parents=[common_parser()], help="列出模板")
     s.set_defaults(func=run_command(_desc_template_list))
@@ -1724,7 +1726,7 @@ def add_parser(sub):
     w = ps.add_parser("winusb", help="WinUSB 控制/批量/中断传输（设备需绑定 WinUSB）")
     ws = w.add_subparsers(dest="usb_winusb_sub", metavar="<sub>")
 
-    s = ws.add_parser("list", parents=[common_parser()], help="枚举 WinUSB 接口；--all 列全部 USB 设备")
+    s = ws.add_parser("list", parents=[common_parser()], help="列出 WinUSB 接口（--all 含全部 USB 设备）")
     s.add_argument("--guid", action="append", metavar="GUID", help="设备接口 GUID（可重复）")
     s.add_argument("--all", action="store_true", help="列出所有 USB 设备及驱动服务名（分诊用）")
     s.set_defaults(func=run_command(_winusb_list))
@@ -1886,7 +1888,7 @@ def add_parser(sub):
     s.add_argument("--id", default="cli", metavar="ID")
     s.set_defaults(func=run_command(_cdc_send))
 
-    s = cs.add_parser("read", parents=[common_parser()], help="读取接收缓冲（一次性 / 等读 / 持续）")
+    s = cs.add_parser("read", parents=[common_parser()], help="读取接收缓冲（一次性 / 同步等读 / 持续跟踪）")
     s.add_argument("--id", default="cli", metavar="ID")
     s.add_argument("--since", type=int, default=None, help="从指定 seq 开始读")
     s.add_argument("--max-bytes", type=int, default=65536)

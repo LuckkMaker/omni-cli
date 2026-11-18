@@ -11,7 +11,7 @@ def add_parser(sub):
     p = sub.add_parser("system", help="系统信息（版本/数据库/运行环境）")
     ps = p.add_subparsers(dest="system_sub", metavar="<sub>")
 
-    s = ps.add_parser("info", parents=[common_parser()], help="查看后端与运行环境版本信息")
+    s = ps.add_parser("info", parents=[common_parser()], help="查看版本、数据库与运行环境信息")
     s.set_defaults(func=run_command(_info))
 
 

@@ -4,6 +4,7 @@ device run|halt|reset|state。
 对标前端 RTT Viewer 面板，提供 SEGGER RTT 会话控制、上行日志读取与目标内核控制。
 """
 
+import argparse
 import base64
 import os
 
@@ -20,11 +21,11 @@ def add_parser(sub):
     ps = p.add_subparsers(dest="rtt_sub", metavar="<sub>")
 
     s = ps.add_parser("status", parents=[common_parser()], help="查询 RTT 会话状态（含上行缓存统计）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_status))
 
     s = ps.add_parser("start", parents=[common_parser()], help="启动 RTT 会话")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.add_argument("--address", type=parse_int, help="控制块搜索起始地址（hex，默认自动检测）")
     s.add_argument("--size", type=parse_int, help="搜索范围大小")
     s.add_argument("--up-channel", type=int, default=0, help="监听的 up channel（默认 0）")
@@ -35,22 +36,24 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_start), timeout=45)
 
     s = ps.add_parser("stop", parents=[common_parser()], help="停止 RTT 会话（已缓存的上行数据仍可读取）")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_stop))
 
     s = ps.add_parser("channels", parents=[common_parser()], help="列出 RTT 通道")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
     s.set_defaults(func=run_command(_channels))
 
     s = ps.add_parser(
         "read", parents=[common_parser()],
         help="读取 RTT 上行数据（一次性或 --follow 持续跟踪）",
-        epilog="示例: omni rtt read --uid 852001270        # 读取当前已缓存日志\n"
-               "      omni rtt read --follow --out rtt.log  # 持续跟踪并落盘\n"
-               "      omni rtt read --json                  # 输出可断言的 JSON（含 seq/text）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n"
+               "  omni rtt read --uid 852001270         # 读取当前已缓存日志\n"
+               "  omni rtt read --follow --out rtt.log  # 持续跟踪并落盘\n"
+               "  omni rtt read --json                  # 输出可断言的 JSON（含 seq/text）",
     )
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
-    s.add_argument("--channel", type=int, help="只看指定 up channel（缺省全部通道）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
+    s.add_argument("--channel", type=int, help="只看指定 up channel（默认全部通道）")
     s.add_argument("--since", type=int, default=None,
                    help="从指定 seq 开始读取（0=从最旧可用数据；默认续读上次位置）")
     s.add_argument("--max-bytes", type=int, default=65536,
@@ -68,9 +71,9 @@ def add_parser(sub):
                    help="以十六进制转储显示（偏移 + 十六进制 + ASCII）")
     s.set_defaults(func=run_command(_read))
 
-    s = ps.add_parser("send", parents=[common_parser()], help="发送二进制数据到 down channel")
-    s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
-    s.add_argument("--channel", type=int, help="down channel 索引（缺省用启动时选中的）")
+    s = ps.add_parser("send", parents=[common_parser()], help="向下行通道发送数据（down channel）")
+    s.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
+    s.add_argument("--channel", type=int, help="down channel 索引（默认用启动时选中的）")
     s.add_argument("--base64", metavar="DATA", help="发送 base64 编码的原始字节")
     s.add_argument("--text", metavar="TEXT", help="或直接发送文本（追加换行用 --no-newline 关闭）")
     s.add_argument("--file", metavar="PATH", help="或发送文件的原始字节（二进制）")
@@ -84,7 +87,7 @@ def add_parser(sub):
     for name, help_ in [("run", "运行目标内核（resume）"), ("halt", "暂停目标内核"),
                         ("status", "查询内核状态"), ("reset", "复位目标并重初始化 RTT")]:
         ss = sd.add_parser(name, parents=[common_parser()], help=help_)
-        ss.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
+        ss.add_argument("--uid", help="探针唯一 ID（默认取第一个探针）")
         if name == "reset":
             ss.add_argument("--no-run", action="store_true", help="复位后停留在 HALTED（默认复位并运行）")
         ss.set_defaults(func=run_command(_device))

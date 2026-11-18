@@ -25,7 +25,7 @@ def add_parser(sub):
     bp = sub.add_parser("backend", help="后端生命周期管理（link / bus）")
     bsub = bp.add_subparsers(dest="backend_sub", metavar="<sub>")
 
-    sp = bsub.add_parser("start", parents=[common_parser(include_service=False)], help="启动常驻后端 daemon")
+    sp = bsub.add_parser("start", parents=[common_parser(include_service=False)], help="启动常驻后端进程")
     sp.add_argument("service", nargs="?", default=None, choices=SERVICE_CHOICES, metavar="SERVICE",
                     help="后端服务（默认 link）")
     sp.set_defaults(func=_start)

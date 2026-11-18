@@ -15,7 +15,7 @@ def add_parser(sub):
     s.add_argument("--limit", type=int, default=0, help="仅显示前 N 个（0=全部）")
     s.set_defaults(func=run_command(_list))
 
-    s = ps.add_parser("info", parents=[common_parser()], help="查询指定型号是否受支持")
+    s = ps.add_parser("info", parents=[common_parser()], help="查询型号是否受支持")
     s.add_argument("part", help="型号名，如 stm32f407xg / G32F463XC")
     s.set_defaults(func=run_command(_info))
 
