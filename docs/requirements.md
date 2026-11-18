@@ -25,6 +25,7 @@
 | **USB 描述符**（解析 / 校验 / 生成） | **无**，纯离线 | — |
 | **USB 请求**（枚举 / 控制 / 批量收发，计划 M3） | 接口必须由可编程驱动接管：WinUSB（固件提供 MS OS 2.0 描述符，或用 INF 绑定）；HID 走系统 HID 驱动（仅报告级）；CDC 走 COM 口（复用 `omni serial`） | 能枚举但打不开；提示"驱动未绑定"。被 usbstor/厂商私有驱动占用的设备只能抓包看，不能发请求 |
 | **USB 抓包**（M1 已实现） | [USBPcap](https://desowin.org/usbpcap/) 1.5.4+（官方安装器，装完重启）；**管理员终端** | `omni usb doctor` 报未安装 / 非管理员，并给出下一步 |
+| **USB 原始访问**（实验，UsbDk spike） | [UsbDk](https://github.com/daynix/UsbDk) 驱动（管理员安装 + 重启）；接管期间设备从系统消失 | `omni usb raw doctor` 报不可用，并给安装提示 |
 | **USB 测试**（M4a 已实现：离线 pcap 用例；动作步骤待 M4b） | 无额外组件（只需用例引用的 pcap 文件）；动作类步骤将来需要 WinUSB/USBPcap | `test run` 报 `pcap 不存在` 或用例格式错误 |
 
 USB 请求不需要管理员权限，但 WinUSB 接口是**独占**的：Keil、厂商工具或其他
