@@ -13,8 +13,10 @@ OMNI CLI 的命令分三类（`omni --help` 也按此分组显示）：
 - **调试/烧录类**：`backend` / `probe` / `target` / `flash` / `commander` / `debug` / `monitor` / `device` / `pack` / `rtt` / `system` / `file` / `tool`。
   它们是 link 后端的瘦客户端，通过 HTTP 复用 REST 接口，不复制后端业务逻辑。
   （例外：`file checksum` 纯本地计算，不需要后端。）
-- **总线工具类**：`serial` / `net`。bus 后端的瘦客户端，命令组默认路由到
+- **总线工具类**：`serial` / `net` / `usb`。bus 后端的瘦客户端，命令组默认路由到
   bus 服务（`--service` 可覆盖），收发共用 GUI 串口页的同一后端实例与接收环形缓存。
+  `usb` 覆盖描述符、WinUSB 请求、USBPcap 抓包与回归用例，依赖见
+  [docs/requirements.md](docs/requirements.md)。
 - **工程配置/构建类**：`omni config`、`omni build`、`omni toolchain`。本地执行，
   不经过后端，实现在 `omni_cli.config` / `omni_cli.builder` / `omni_cli.toolchain` 内；
   只依赖 omni-emb 仓库的 `Kconfig` / `soc` / `boards` 数据和本机工具链。
