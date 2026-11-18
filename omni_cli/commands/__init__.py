@@ -14,6 +14,7 @@ from . import file
 from . import flash
 from . import monitor
 from . import modules
+from . import net
 from . import pack
 from . import probe
 from . import rtt
@@ -35,6 +36,7 @@ _MODULES = (
     flash,
     monitor,
     modules,
+    net,
     pack,
     probe,
     rtt,

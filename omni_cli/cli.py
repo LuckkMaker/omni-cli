@@ -25,7 +25,7 @@ COMMAND_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
       "rtt", "device", "pack", "file", "system", "tool")),
     ("工程构建（本地执行，无需后端）",
      ("boards", "build", "config", "modules", "toolchain")),
-    ("串口与网络（连接 bus 后端，--service 可覆盖）", ("serial",)),
+    ("串口与网络（连接 bus 后端，--service 可覆盖）", ("serial", "net")),
 ]
 
 

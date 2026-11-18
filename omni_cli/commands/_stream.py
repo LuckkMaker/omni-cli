@@ -25,6 +25,7 @@ import json
 import sys
 import time
 
+from .. import cursors
 from ..formatting import ctx_error
 
 
@@ -46,6 +47,19 @@ def _raw_write(data: bytes) -> None:
     sys.stdout.buffer.flush()
 
 
+def since_now(peek) -> int:
+    """取当前 ``next_seq``：让 ``--wait`` 等读只等**新**数据，不重放历史。
+
+    ``since=0`` 的语义是「从最旧可用数据开始」，对 ``--follow`` 正确；但
+    「发一条、收一条」的等读如果也从头读，第二次调用就会把上一轮的响应
+    再吐一遍。等读时改为从当前末尾开始。
+    """
+    try:
+        return int(peek().get("next_seq") or 0)
+    except Exception:
+        return 0
+
+
 def _fetch_batches(fetch, since: int, max_bytes: int):
     """调用 fetch 并解出 (响应字典, 原始字节)。fetch 抛 ApiError 由调用方处理。"""
     data = fetch(since, max_bytes)
@@ -53,7 +67,9 @@ def _fetch_batches(fetch, since: int, max_bytes: int):
     return data, raw
 
 
-def run_cursor_stream(args, fetch, *, subject: str, empty_hint: str) -> int:
+def run_cursor_stream(args, fetch, *, subject: str, empty_hint: str,
+                      cursor_key: str | None = None,
+                      service_name: str | None = None) -> int:
     """执行一次（或 --follow 持续）游标读取，返回退出码。
 
     Args:
@@ -63,6 +79,9 @@ def run_cursor_stream(args, fetch, *, subject: str, empty_hint: str) -> int:
             URL 与查询参数（如 rtt 的 uid/channel）。
         subject: 文案中的对象名（"RTT" / "串口"），用于警告与提示。
         empty_hint: 无数据时的可执行提示（如“固件未初始化 RTT”/“确认对端已发送”）。
+        cursor_key: 游标记忆的键（如 ``serial:cli``）；给出时默认续读上次位置，
+            首次从最旧数据开始。显式 ``--since`` 覆盖。
+        service_name: 游标所属服务（决定状态目录），默认 link。
     """
     if args.follow and args.json_ and args.quiet:
         print("错误: --quiet 与 --json --follow 不能同时使用（JSONL 需要输出）。", file=sys.stderr)
@@ -89,7 +108,14 @@ def run_cursor_stream(args, fetch, *, subject: str, empty_hint: str) -> int:
             print(f"错误: 无法打开输出文件 {args.out}: {e}", file=sys.stderr)
             return 1
 
-    since = max(0, int(args.since or 0))
+    # 起始游标：显式 --since（含 0）优先 → 记忆的上次位置 → 最旧数据
+    explicit_since = getattr(args, "since", None)
+    if explicit_since is not None:
+        since = max(0, int(explicit_since))
+    elif cursor_key:
+        since = cursors.load_cursor(cursor_key, service_name or "link")
+    else:
+        since = 0
     deadline = time.time() + args.duration if (args.follow and args.duration > 0) else None
     read_any = False
     session_reset_warned = False
@@ -151,6 +177,8 @@ def run_cursor_stream(args, fetch, *, subject: str, empty_hint: str) -> int:
                     _raw_write(raw)
 
             since = int(data.get("cursor", since))
+            if cursor_key:
+                cursors.save_cursor(cursor_key, since, service_name or "link")
             if not follow:
                 break
             if deadline is not None and time.time() >= deadline:
@@ -183,4 +211,4 @@ def run_cursor_stream(args, fetch, *, subject: str, empty_hint: str) -> int:
     return 0
 
 
-__all__ = ["hexdump", "run_cursor_stream"]
+__all__ = ["hexdump", "run_cursor_stream", "since_now"]

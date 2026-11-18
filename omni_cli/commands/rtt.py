@@ -51,8 +51,8 @@ def add_parser(sub):
     )
     s.add_argument("--uid", help="探针唯一 ID（缺省取第一个探针）")
     s.add_argument("--channel", type=int, help="只看指定 up channel（缺省全部通道）")
-    s.add_argument("--since", type=int, default=0,
-                   help="从指定 seq 开始读取（0=从当前最旧可用数据；默认 0）")
+    s.add_argument("--since", type=int, default=None,
+                   help="从指定 seq 开始读取（0=从最旧可用数据；默认续读上次位置）")
     s.add_argument("--max-bytes", type=int, default=65536,
                    help="单次最多读取的字节数（默认 65536）")
     s.add_argument("--follow", action="store_true", help="持续跟踪新数据（Ctrl+C 结束）")
@@ -176,6 +176,8 @@ def _read(c: ApiClient, args):
         subject="RTT",
         empty_hint="（暂无 RTT 数据：确认固件已初始化 SEGGER RTT 并产生输出，"
                    "或先执行 `omni rtt start`）",
+        cursor_key=f"rtt:{uid}:{channel if channel is not None else '*'}",
+        service_name="link",
     )
 
 

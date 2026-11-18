@@ -13,7 +13,7 @@ OMNI CLI 的命令分三类（`omni --help` 也按此分组显示）：
 - **调试/烧录类**：`backend` / `probe` / `target` / `flash` / `commander` / `debug` / `monitor` / `device` / `pack` / `rtt` / `system` / `file` / `tool`。
   它们是 link 后端的瘦客户端，通过 HTTP 复用 REST 接口，不复制后端业务逻辑。
   （例外：`file checksum` 纯本地计算，不需要后端。）
-- **总线工具类**：`serial`（后续 `net`）。bus 后端的瘦客户端，命令组默认路由到
+- **总线工具类**：`serial` / `net`。bus 后端的瘦客户端，命令组默认路由到
   bus 服务（`--service` 可覆盖），收发共用 GUI 串口页的同一后端实例与接收环形缓存。
 - **工程配置/构建类**：`omni config`、`omni build`、`omni toolchain`。本地执行，
   不经过后端，实现在 `omni_cli.config` / `omni_cli.builder` / `omni_cli.toolchain` 内；
@@ -481,6 +481,32 @@ omni serial close
 `lost` 告知）；seq 游标跨串口重开单调递增，多客户端（GUI + CLI）互不影响。
 CLI 收不到数据时先确认：对端已在发送、波特率/校验位匹配、`serial status` 里
 `buffered_bytes` 在增长。
+
+### `net` — 网络调试（bus 服务）
+
+| 子命令 | 说明 |
+| --- | --- |
+| `interfaces` | 枚举本机 IPv4 地址与主机名 |
+| `tcp-server start/stop/status` | 本机监听；`status` 列出已连客户端（id / 对端地址 / 收发字节） |
+| `tcp-server send` | 向客户端发送（`--target ID` 可重复，缺省广播） |
+| `tcp-server kick/echo` | 断开指定客户端 / 开-关服务端回显 |
+| `tcp-client connect/disconnect/status/send` | 主动连接远端服务器并收发 |
+| `udp start/stop/status/send/echo` | 绑定本地端口收发、向目标地址发数据报、开-关回声 |
+| `read` | 读取接收缓冲：`--kind tcp-server\|tcp-client\|udp`、`--peer host:port` 过滤、`--since` 游标、`--wait MS` 同步等读、`--follow`、`--hex`、`--out`、`--json` |
+| `ping` | ICMP ping：`-n` 次数、`-i` 间隔、`-W` 超时、`-s` 包长；`--last` 查最近一次汇总（时延 min/avg/max、丢包率） |
+
+```powershell
+omni net interfaces
+omni net ping 192.168.1.100 -n 4
+omni net tcp-client connect --host 192.168.1.100 --port 6000
+omni net tcp-client send --text "hello" && omni net read --kind tcp-client --wait 500 --hex
+omni net read --kind tcp-server --peer 192.168.1.101:52036 --follow
+omni net udp start --port 5000 && omni net read --kind udp --wait 500
+```
+
+**游标记忆**：`read` 默认续读上次位置（记录在 `<服务状态目录>/.read_cursor.json`），
+所以「发一条、收一条」不会重放历史；首次读从最旧数据开始；`--since 0` 显式要求
+从头读，`--since N` 覆盖记录。`rtt` / `serial` / `net` 三个流式命令共用这一行为。
 
 ### `system` — 系统信息
 

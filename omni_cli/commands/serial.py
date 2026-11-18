@@ -61,8 +61,9 @@ def add_parser(sub):
                "      omni serial send --text AT && omni serial read --wait 300",
     )
     s.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
-    s.add_argument("--since", type=int, default=0,
-                   help="从指定 seq 开始读取（0=从当前最旧可用数据；默认 0）")
+    s.add_argument("--since", type=int, default=None,
+                   help="从指定 seq 开始读取（0=从最旧可用数据；默认续读上次位置，"
+                        "首次读则从最旧开始）")
     s.add_argument("--max-bytes", type=int, default=65536,
                    help="单次最多读取的字节数（默认 65536）")
     s.add_argument("--wait", type=int, default=None, metavar="MS",
@@ -222,6 +223,8 @@ def _read(c: ApiClient, args):
         subject="串口",
         empty_hint="（暂无接收数据：确认对端已发送且波特率/校验位匹配，"
                    "或先执行 `omni serial open`）",
+        cursor_key=f"serial:{args.id}",
+        service_name="bus",
     )
 
 
