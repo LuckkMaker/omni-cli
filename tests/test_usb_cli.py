@@ -108,6 +108,26 @@ def ns(**kw) -> argparse.Namespace:
         report_id=0,
         get=False,
         set=False,
+        guid=None,
+        index=None,
+        interface=0,
+        request_type=None,
+        direction="in",
+        req_type="standard",
+        recipient="device",
+        request=None,
+        value="0",
+        pipe=None,
+        repeat=1,
+        out_pipe=None,
+        in_pipe=None,
+        size=64,
+        pipeline=1,
+        pattern="increment",
+        seed=0,
+        abort=False,
+        flush=False,
+        reset=False,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -166,7 +186,7 @@ def main() -> int:
     # ── 1. 命令面 ────────────────────────────────────────
     code, out, _ = run_cli(["usb", "--help"])
     check("usb --help 退出码 0", code == 0, str(code))
-    for sub in ("doctor", "list", "control", "desc", "hid", "cdc", "capture", "test"):
+    for sub in ("doctor", "desc", "winusb", "hid", "cdc", "capture", "test"):
         check(f"usb --help 含 {sub}", sub in out)
 
     code, out, _ = run_cli([])
@@ -176,9 +196,7 @@ def main() -> int:
     code, _, _ = run_cli(["usb"])
     check("usb 无子命令返回 2", code == 2, str(code))
 
-    # ── 2. M3/M4 仍是未实现 ─────────────────────────────
-    code, _, err = run_cli(["usb", "control", "--request", "0x06", "--length", "18"])
-    check("control 未实现退出码 1", code == 1 and "M3" in err, err.strip())
+    # ── 2. M3 请求按传输通道拆分（winusb/hid/cdc） ───────
 
     # ── 2b. desc（M2） ───────────────────────────────────
     doc = {
@@ -558,6 +576,106 @@ def main() -> int:
         ns(),
     )
     check("hid status 未打开退出码 1", code == 1, str(code))
+
+    # ── 2g. winusb（宿主通道） ───────────────────────────
+    winusb_device = {
+        "vid": "0xC251",
+        "pid": "0x0002",
+        "speed": "full",
+        "bcdUSB": "0x0210",
+        "interfaceNumber": 0,
+        "class": "0xFF",
+        "path": r"\\?\usb#vid_c251&pid_0002",
+        "endpoints": [
+            {"address": "0x01", "direction": "out", "type": "bulk", "maxPacketSize": 64, "interval": 0},
+            {"address": "0x81", "direction": "in", "type": "bulk", "maxPacketSize": 64, "interval": 0},
+        ],
+    }
+    winusb_list = {"success": True, "devices": [winusb_device]}
+    code, out, _ = capture(
+        usb_cmd._winusb_list,
+        StubClient({"/api/usb/winusb/devices": winusb_list}),
+        ns(),
+    )
+    check("winusb list 显示设备", code == 0 and "0xC251" in out and "2" in out, out)
+
+    code, out, _ = capture(
+        usb_cmd._winusb_info,
+        StubClient({"/api/usb/winusb/devices": winusb_list}),
+        ns(),
+    )
+    check("winusb info 显示端点", code == 0 and "bulk" in out and "0x81" in out, out)
+
+    client = StubClient(
+        {"/api/usb/winusb/open": {"success": True, "device": winusb_device, "id": "cli"}}
+    )
+    code, out, _ = capture(
+        usb_cmd._winusb_open, client, ns(vid="0xC251", pid="0x0002")
+    )
+    check("winusb open 退出码 0", code == 0 and "0xC251" in out, out)
+    payload = client.calls[0][2]
+    check(
+        "winusb open 载荷 vid/pid",
+        payload.get("vid") == 0xC251 and payload.get("pid") == 0x0002,
+        str(payload),
+    )
+
+    client = StubClient(
+        {"/api/usb/winusb/control": {"success": True, "dataHex": "12 01 00", "length": 3}}
+    )
+    code, out, _ = capture(
+        usb_cmd._winusb_control, client, ns(request="0x06", value="0x0100", length="3")
+    )
+    check("winusb control 退出码 0", code == 0 and "12 01 00" in out, out)
+    payload = client.calls[0][2]
+    check(
+        "winusb control 默认 bmRequestType=0x80",
+        payload.get("request_type") == 0x80,
+        str(payload.get("request_type")),
+    )
+
+    code, out, _ = capture(
+        usb_cmd._winusb_read,
+        StubClient(
+            {"/api/usb/winusb/transfer": {"success": True, "dataHex": "AA BB", "length": 2}}
+        ),
+        ns(pipe="0x81", length=2),
+    )
+    check("winusb read 显示数据", code == 0 and "AA BB" in out, out)
+
+    client = StubClient(
+        {"/api/usb/winusb/transfer": {"success": True, "bytesWritten": 2}}
+    )
+    code, out, _ = capture(
+        usb_cmd._winusb_write, client, ns(pipe="0x01", data="AA BB")
+    )
+    check("winusb write 退出码 0", code == 0 and "2" in out, out)
+    payload = client.calls[0][2]
+    check("winusb write 方向为 out", payload.get("direction") == "out", str(payload))
+
+    echo_ok = {
+        "success": True,
+        "iterations": 2,
+        "size": 64,
+        "pipeline": 1,
+        "throughputKiBs": 45.3,
+        "mismatches": 0,
+        "firstError": None,
+    }
+    code, out, _ = capture(
+        usb_cmd._winusb_echo,
+        StubClient({"/api/usb/winusb/echo": echo_ok}),
+        ns(out_pipe="0x01", in_pipe="0x81"),
+    )
+    check("winusb echo 通过退出 0", code == 0 and "45.3" in out, out)
+
+    echo_bad = dict(echo_ok, mismatches=1, firstError="第 1 次不一致")
+    code, _, _ = capture(
+        usb_cmd._winusb_echo,
+        StubClient({"/api/usb/winusb/echo": echo_bad}),
+        ns(out_pipe="0x01", in_pipe="0x81"),
+    )
+    check("winusb echo 不一致退出 1", code == 1, str(code))
 
     # ── 3. doctor（M1） ──────────────────────────────────
     code, out, _ = capture(

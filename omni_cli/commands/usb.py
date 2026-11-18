@@ -59,6 +59,12 @@ _HINTS = {
     "hid_unavailable": "HID 访问仅支持 Windows。",
     "hid_not_found": "未找到该 VID/PID 的 HID 设备：先 `omni usb hid list` 确认。",
     "hid_busy": "HID 设备被占用（系统驱动或其他进程独占）：关闭占用程序后重试。",
+    "winusb_unavailable": "WinUSB 访问仅支持 Windows。",
+    "winusb_not_found": "未找到 WinUSB 接口：确认固件带 MS OS 2.0 描述符或用 INF 绑定，"
+    "并用 `omni usb winusb list` 检查。",
+    "winusb_open_failed": "WinUSB 接口打开失败：设备可能被 Keil/厂商工具占用，或驱动未绑定。",
+    "winusb_transfer_failed": "传输失败：检查端点地址、包长、设备是否处于配置状态。",
+    "winusb_invalid": "参数无效：检查 hex 数据与长度。",
 }
 
 _TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "方向", "类型", "长度", "状态", "摘要"]
@@ -981,6 +987,8 @@ def _cdc_close(c: ApiClient, args):
 
 
 def _as_number(text: str, field: str) -> int:
+    if text is None or text == "":
+        return 0
     try:
         return int(str(text), 0)
     except (TypeError, ValueError):
@@ -1189,6 +1197,306 @@ def _hid_close(c: ApiClient, args):
     return 0
 
 
+def _request_type(args) -> int:
+    if args.request_type:
+        return _as_number(args.request_type, "--request-type") & 0xFF
+    direction = 0x80 if args.direction == "in" else 0
+    kind = {"standard": 0x00, "class": 0x20, "vendor": 0x40}[args.req_type]
+    recipient = {"device": 0, "interface": 1, "endpoint": 2, "other": 3}[args.recipient]
+    return direction | kind | recipient
+
+
+def _winusb_devices(c: ApiClient, guids: list[str] | None = None) -> dict:
+    query = ""
+    if guids:
+        query = "?" + "&".join(f"guid={guid}" for guid in guids)
+    return c.get(f"/api/usb/winusb/devices{query}")
+
+
+def _format_device(device: dict) -> list[str]:
+    lines = [
+        f"设备  {device.get('vid')}:{device.get('pid')}  "
+        f"{device.get('speed')}  bcdUSB {device.get('bcdUSB')}  "
+        f"接口 {device.get('interfaceNumber')} class {device.get('class')}",
+        f"路径  {device.get('path')}",
+    ]
+    for endpoint in device.get("endpoints") or []:
+        lines.append(
+            f"  {endpoint.get('address')} {str(endpoint.get('direction', '')).upper():3} "
+            f"{endpoint.get('type'):11} max {endpoint.get('maxPacketSize'):4} "
+            f"interval {endpoint.get('interval')}"
+        )
+    return lines
+
+
+def _winusb_list(c: ApiClient, args):
+    data = _winusb_devices(c, args.guid)
+    if not data.get("success", True):
+        return _failure(data, "WinUSB 枚举失败")
+    devices = data.get("devices") or []
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if not devices:
+        finish(
+            args,
+            data,
+            "未发现 WinUSB 接口。确认固件带 MS OS 2.0 描述符（或用 INF 绑定），"
+            "并在设备管理器里确认它没有被其他驱动占用。",
+        )
+        return 0
+    rows = [
+        [
+            f"{item.get('vid')}:{item.get('pid')}",
+            item.get("speed"),
+            item.get("interfaceNumber"),
+            item.get("class"),
+            len(item.get("endpoints") or []),
+            item.get("path"),
+        ]
+        for item in devices
+    ]
+    print_table(["VID:PID", "速度", "接口", "Class", "端点数", "路径"], rows)
+    return 0
+
+
+def _winusb_info(c: ApiClient, args):
+    data = _winusb_devices(c, args.guid)
+    if not data.get("success", True):
+        return _failure(data, "WinUSB 枚举失败")
+    devices = data.get("devices") or []
+    if args.index is not None:
+        if not 0 <= args.index < len(devices):
+            return ctx_error(f"设备序号越界：{args.index}（共 {len(devices)} 个）")
+        devices = [devices[args.index]]
+    if args.vid:
+        devices = [item for item in devices if item.get("vid", "").lower() == args.vid.lower()]
+    if args.pid:
+        devices = [item for item in devices if item.get("pid", "").lower() == args.pid.lower()]
+    if not devices:
+        return ctx_error("没有匹配的 WinUSB 设备。")
+    if args.json_:
+        finish(args, {"devices": devices}, "")
+        return 0
+    blocks = []
+    for device in devices:
+        blocks.extend(_format_device(device))
+        blocks.append("")
+    finish(args, {"devices": devices}, "\n".join(blocks).rstrip())
+    return 0
+
+
+def _winusb_open(c: ApiClient, args):
+    payload = {
+        "id": args.id,
+        "path": args.path,
+        "vid": None if args.vid is None else _as_number(args.vid, "--vid"),
+        "pid": None if args.pid is None else _as_number(args.pid, "--pid"),
+        "interface": args.interface,
+        "timeout_ms": args.timeout_ms,
+    }
+    data = c.post("/api/usb/winusb/open", payload)
+    if not data.get("success", True):
+        return _failure(data, "打开 WinUSB 接口失败")
+    device = data.get("device") or {}
+    finish(
+        args,
+        data,
+        f"WinUSB 已打开 {device.get('vid')}:{device.get('pid')} "
+        f"{device.get('speed')}（接口 {device.get('interfaceNumber')}，实例 {args.id}）",
+    )
+    return 0
+
+
+def _winusb_close(c: ApiClient, args):
+    data = c.post("/api/usb/winusb/close", {"id": args.id})
+    if not data.get("success", True):
+        return _failure(data, "关闭失败")
+    finish(args, data, f"WinUSB 已关闭（实例 {args.id}）")
+    return 0
+
+
+def _winusb_status(c: ApiClient, args):
+    data = c.get(f"/api/usb/winusb/status?id={args.id}")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if not data.get("connected"):
+        finish(args, data, f"WinUSB 会话未打开（实例 {args.id}）。")
+        return 1
+    device = data.get("device") or {}
+    finish(
+        args,
+        data,
+        f"已打开 {device.get('vid')}:{device.get('pid')} {device.get('speed')}"
+        f"（实例 {args.id}，超时 {data.get('timeoutMs')} ms）",
+    )
+    return 0
+
+
+def _winusb_control(c: ApiClient, args):
+    try:
+        request_type = _request_type(args)
+        request = _as_number(args.request, "--request")
+        value = _as_number(args.value, "--value")
+        index = _as_number(args.index, "--index")
+        length = _as_number(args.length, "--length")
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    payload, problem = _read_payload(args)
+    if problem:
+        return ctx_error(problem)
+    if request_type & 0x80 == 0 and length and len(payload or b"") != length:
+        return ctx_error("OUT 传输的 --length 必须与数据长度一致（或省略 --length）")
+    data = c.post(
+        "/api/usb/winusb/control",
+        {
+            "id": args.id,
+            "request_type": request_type,
+            "request": request,
+            "value": value,
+            "index": index,
+            "length": length or len(payload or b""),
+            "hex": (payload or b"").hex().upper(),
+        },
+    )
+    if not data.get("success", True):
+        return _failure(data, "控制传输失败")
+    raw = bytes.fromhex((data.get("dataHex") or "").replace(" ", ""))
+    if args.json_:
+        finish(args, data, "")
+    else:
+        finish(args, data, hexdump(raw) if raw else "（无数据段）")
+    return 0
+
+
+def _winusb_read(c: ApiClient, args):
+    if args.count < 0:
+        return ctx_error("--count 不能为负数")
+    try:
+        pipe = _as_number(args.pipe, "--pipe")
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    out_file = None
+    if args.out:
+        try:
+            out_file = open(args.out, "ab")
+        except OSError as exc:
+            return ctx_error(f"无法写入 {args.out}：{exc}")
+    reports: list[dict] = []
+    try:
+        for index in range(args.count):
+            data = c.post(
+                "/api/usb/winusb/transfer",
+                {
+                    "id": args.id,
+                    "pipe": pipe,
+                    "direction": "in",
+                    "length": args.length,
+                },
+            )
+            if not data.get("success", True):
+                return _failure(data, f"第 {index + 1} 次读取失败")
+            raw = bytes.fromhex((data.get("dataHex") or "").replace(" ", ""))
+            if out_file is not None:
+                out_file.write(raw)
+                out_file.flush()
+            reports.append(data)
+            if not args.json_ and not args.quiet:
+                print(f"#{index + 1}  {len(raw)} 字节")
+                if raw:
+                    print(hexdump(raw))
+    finally:
+        if out_file is not None:
+            out_file.close()
+    if args.json_:
+        finish(args, {"reports": reports}, "")
+    return 0
+
+
+def _winusb_write(c: ApiClient, args):
+    try:
+        pipe = _as_number(args.pipe, "--pipe")
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    payload, problem = _read_payload(args)
+    if problem:
+        return ctx_error(problem)
+    if not payload:
+        return ctx_error("需要 --data（十六进制）或 --file")
+    written = 0
+    for _ in range(max(1, args.repeat)):
+        data = c.post(
+            "/api/usb/winusb/transfer",
+            {
+                "id": args.id,
+                "pipe": pipe,
+                "direction": "out",
+                "hex": payload.hex().upper(),
+            },
+        )
+        if not data.get("success", True):
+            return _failure(data, "写传输失败")
+        written += int(data.get("bytesWritten") or 0)
+    finish(
+        args,
+        {"bytesWritten": written, "repeat": max(1, args.repeat)},
+        f"已写 {written} 字节（{max(1, args.repeat)} 次，端点 0x{pipe:02X}）",
+    )
+    return 0
+
+
+def _winusb_pipe(c: ApiClient, args):
+    try:
+        pipe = _as_number(args.pipe, "--pipe")
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    action = "abort" if args.abort else ("flush" if args.flush else "reset")
+    data = c.post(
+        "/api/usb/winusb/pipe",
+        {"id": args.id, "pipe": pipe, "action": action},
+    )
+    if not data.get("success", True):
+        return _failure(data, f"{action} 失败")
+    finish(args, data, f"管道 0x{pipe:02X} {action} 完成")
+    return 0
+
+
+def _winusb_echo(c: ApiClient, args):
+    try:
+        out_pipe = _as_number(args.out_pipe, "--out-pipe")
+        in_pipe = _as_number(args.in_pipe, "--in-pipe")
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    data = c.post(
+        "/api/usb/winusb/echo",
+        {
+            "id": args.id,
+            "out_pipe": out_pipe,
+            "in_pipe": in_pipe,
+            "size": args.size,
+            "count": args.count,
+            "pipeline": args.pipeline,
+            "pattern": args.pattern,
+            "seed": args.seed or 0,
+        },
+    )
+    if not data.get("success", True):
+        return _failure(data, "回环测试失败")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    finish(
+        args,
+        data,
+        f"echo 0x{out_pipe:02X} -> 0x{in_pipe:02X}: {data.get('iterations')} 次 × "
+        f"{data.get('size')} 字节（pipeline {data.get('pipeline')}）\n"
+        f"吞吐 {data.get('throughputKiBs')} KiB/s，不一致 {data.get('mismatches')} 次"
+        + (f"\n首个错误: {data['firstError']}" if data.get("firstError") else ""),
+    )
+    return 0 if not data.get("mismatches") else 1
+
+
 def add_parser(sub):
     p = sub.add_parser(
         "usb",
@@ -1205,7 +1513,11 @@ def add_parser(sub):
             "  omni usb capture transfers --follow\n"
             "  omni usb capture open --pcap sess.pcap --json\n"
             "  omni usb desc parse --hex \"80 06 00 01 00 00 12 00\"\n"
-            "  omni usb open --vid 0xC251 --pid 0x0002\n"
+            "  omni usb winusb list\n"
+            "  omni usb winusb open --vid 0xC251 --pid 0x0002\n"
+            "  omni usb winusb echo --out-pipe 0x01 --in-pipe 0x81 --size 512\n"
+            "  omni usb hid list\n"
+            "  omni usb cdc list\n"
             "  omni usb test run --file case.json --json\n"
             "\n"
             "抓包需要安装 USBPcap 并以管理员身份运行；描述符与请求功能不需要。"
@@ -1216,94 +1528,6 @@ def add_parser(sub):
     # ── 环境诊断 ──────────────────────────────────────────
     s = ps.add_parser("doctor", parents=[common_parser()], help="环境诊断（USBPcap / 管理员 / WinUSB）")
     s.set_defaults(func=run_command(_doctor))
-
-    # ── 设备与请求（M3） ──────────────────────────────────
-    s = ps.add_parser("list", parents=[common_parser()], help="枚举 USB 设备（SetupAPI）")
-    s.add_argument("--all", action="store_true", help="列出全部 USB 设备（含驱动服务名）")
-    s.add_argument("--vid", help="按 VID 过滤，如 0xC251")
-    s.add_argument("--pid", help="按 PID 过滤，如 0x0002")
-    s.add_argument("--guid", action="append", metavar="GUID", help="设备接口 GUID（可重复）")
-    s.set_defaults(func=_todo("list"))
-
-    s = ps.add_parser("info", parents=[common_parser()], help="设备/配置/接口/端点详情")
-    s.add_argument("--index", type=int, help="设备序号（list 输出）")
-    s.add_argument("--vid")
-    s.add_argument("--pid")
-    s.add_argument("--hex", action="store_true", help="附带原始描述符")
-    s.set_defaults(func=_todo("info"))
-
-    s = ps.add_parser("open", parents=[common_parser()], help="打开设备接口（独占）")
-    s.add_argument("--id", default="cli", metavar="ID", help="会话 ID（默认 cli）")
-    s.add_argument("--index", type=int, help="设备序号")
-    s.add_argument("--vid")
-    s.add_argument("--pid")
-    s.add_argument("--interface", type=int, default=0, help="接口号（默认 0）")
-    s.add_argument("--timeout-ms", type=int, default=1000, help="传输超时毫秒（默认 1000）")
-    s.set_defaults(func=_todo("open"))
-
-    s = ps.add_parser("close", parents=[common_parser()], help="关闭会话（幂等）")
-    s.add_argument("--id", default="cli", metavar="ID")
-    s.set_defaults(func=_todo("close"))
-
-    s = ps.add_parser("status", parents=[common_parser()], help="查询会话状态")
-    s.add_argument("--id", default="cli", metavar="ID", help="会话 ID（省略则列出全部）")
-    s.set_defaults(func=_todo("status"))
-
-    s = ps.add_parser("control", parents=[common_parser()], help="控制传输（Setup + 数据段）")
-    s.add_argument("--id", default="cli", metavar="ID")
-    s.add_argument("--request-type", help="bmRequestType，如 0x80（优先于方向/类型/接收者）")
-    s.add_argument("--direction", choices=("in", "out"), default="in")
-    s.add_argument("--type", choices=("standard", "class", "vendor"), default="standard")
-    s.add_argument("--recipient", choices=("device", "interface", "endpoint", "other"), default="device")
-    s.add_argument("--request", required=True, help="bRequest，如 0x06")
-    s.add_argument("--value", default="0", help="wValue，如 0x0100")
-    s.add_argument("--index", default="0", help="wIndex")
-    s.add_argument("--length", default="0", help="wLength（IN 传输的期望长度）")
-    s.add_argument("--data", help="OUT 数据（十六进制）")
-    s.add_argument("--file", help="OUT 数据文件")
-    s.add_argument("--decode", action="store_true", help="按请求自动解析响应")
-    s.set_defaults(func=_todo("control"))
-
-    s = ps.add_parser("read", parents=[common_parser()], help="IN 传输（批量/中断）")
-    s.add_argument("--id", default="cli", metavar="ID")
-    s.add_argument("--pipe", required=True, help="端点地址，如 0x81")
-    s.add_argument("--length", type=int, required=True, help="单次读取字节数")
-    s.add_argument("--count", type=int, default=1, help="读取次数（0=持续）")
-    s.add_argument("--out", metavar="FILE", help="写入文件")
-    s.add_argument("--timeout-ms", type=int, default=1000)
-    s.add_argument("--hex", action="store_true", help="十六进制转储")
-    s.set_defaults(func=_todo("read"))
-
-    s = ps.add_parser("write", parents=[common_parser()], help="OUT 传输（批量/中断）")
-    s.add_argument("--id", default="cli", metavar="ID")
-    s.add_argument("--pipe", required=True, help="端点地址，如 0x01")
-    s.add_argument("--data", help="十六进制数据")
-    s.add_argument("--file", help="数据文件")
-    s.add_argument("--chunk", type=int, help="按包长拆分（默认整包一次提交）")
-    s.add_argument("--repeat", type=int, default=1)
-    s.add_argument("--timeout-ms", type=int, default=1000)
-    s.set_defaults(func=_todo("write"))
-
-    s = ps.add_parser("pipe", parents=[common_parser()], help="管道控制（abort/flush/reset）")
-    s.add_argument("--id", default="cli", metavar="ID")
-    s.add_argument("--pipe", required=True, help="端点地址")
-    g = s.add_mutually_exclusive_group(required=True)
-    g.add_argument("--abort", action="store_true")
-    g.add_argument("--flush", action="store_true")
-    g.add_argument("--reset", action="store_true")
-    s.set_defaults(func=_todo("pipe"))
-
-    s = ps.add_parser("echo", parents=[common_parser()], help="回环自检（吞吐 / 一致性）")
-    s.add_argument("--id", default="cli", metavar="ID")
-    s.add_argument("--out-pipe", help="OUT 端点（默认自动选）")
-    s.add_argument("--in-pipe", help="IN 端点（默认自动选）")
-    s.add_argument("--size", type=int, help="每次传输字节数（默认取端点最大包长）")
-    s.add_argument("--count", type=int, default=100, help="迭代次数")
-    s.add_argument("--pipeline", type=int, default=1, help="连续写 N 次再读回（暴露单缓冲缺陷）")
-    s.add_argument("--pattern", choices=("increment", "random", "zeros", "aa", "ff"), default="increment")
-    s.add_argument("--seed", type=int)
-    s.add_argument("--keep-going", action="store_true", help="出错后继续剩余迭代")
-    s.set_defaults(func=_todo("echo"))
 
     # ── 描述符（M2） ──────────────────────────────────────
     d = ps.add_parser("desc", help="描述符解析 / 校验 / 生成 / 模板")
@@ -1401,6 +1625,88 @@ def add_parser(sub):
     s.add_argument("transfer_id", type=int, help="传输 ID")
     s.add_argument("--id", dest="session", default="cli", metavar="ID", help="目标会话（默认 cli）")
     s.set_defaults(func=_todo("replay"))
+
+    # ── WinUSB（控制/批量/中断 + echo） ──────────────────
+    w = ps.add_parser("winusb", help="WinUSB 控制/批量/中断传输（设备需绑定 WinUSB）")
+    ws = w.add_subparsers(dest="usb_winusb_sub", metavar="<sub>")
+
+    s = ws.add_parser("list", parents=[common_parser()], help="枚举 WinUSB 接口")
+    s.add_argument("--guid", action="append", metavar="GUID", help="设备接口 GUID（可重复）")
+    s.set_defaults(func=run_command(_winusb_list))
+
+    s = ws.add_parser("info", parents=[common_parser()], help="设备/接口/端点详情")
+    s.add_argument("--index", type=int, help="设备序号（list 输出）")
+    s.add_argument("--vid")
+    s.add_argument("--pid")
+    s.add_argument("--guid", action="append", metavar="GUID")
+    s.set_defaults(func=run_command(_winusb_info))
+
+    s = ws.add_parser("open", parents=[common_parser()], help="打开 WinUSB 接口（独占）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--path", help="设备接口路径（优先于 VID/PID）")
+    s.add_argument("--vid")
+    s.add_argument("--pid")
+    s.add_argument("--interface", type=int, default=0)
+    s.add_argument("--timeout-ms", type=int, default=1000)
+    s.set_defaults(func=run_command(_winusb_open))
+
+    s = ws.add_parser("close", parents=[common_parser()], help="关闭会话")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_winusb_close))
+
+    s = ws.add_parser("status", parents=[common_parser()], help="查询会话状态")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=run_command(_winusb_status))
+
+    s = ws.add_parser("control", parents=[common_parser()], help="控制传输（SETUP + 数据段）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--request-type", help="bmRequestType（优先于方向/类型/接收者）")
+    s.add_argument("--direction", choices=("in", "out"), default="in")
+    s.add_argument("--type", dest="req_type", choices=("standard", "class", "vendor"), default="standard")
+    s.add_argument("--recipient", choices=("device", "interface", "endpoint", "other"), default="device")
+    s.add_argument("--request", required=True, help="bRequest，如 0x06")
+    s.add_argument("--value", default="0")
+    s.add_argument("--index", default="0")
+    s.add_argument("--length", default="0")
+    s.add_argument("--data", help="OUT 数据（十六进制）")
+    s.add_argument("--file", help="OUT 数据文件")
+    s.set_defaults(func=run_command(_winusb_control))
+
+    s = ws.add_parser("read", parents=[common_parser()], help="IN 传输（批量/中断）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--pipe", required=True, help="端点地址，如 0x81")
+    s.add_argument("--length", type=int, required=True, help="单次读取字节数")
+    s.add_argument("--count", type=int, default=1, help="读取次数")
+    s.add_argument("--out", metavar="FILE", help="追加写入文件")
+    s.set_defaults(func=run_command(_winusb_read))
+
+    s = ws.add_parser("write", parents=[common_parser()], help="OUT 传输（批量/中断）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--pipe", required=True, help="端点地址，如 0x01")
+    s.add_argument("--data", help="数据（十六进制）")
+    s.add_argument("--file", help="数据文件")
+    s.add_argument("--repeat", type=int, default=1)
+    s.set_defaults(func=run_command(_winusb_write))
+
+    s = ws.add_parser("pipe", parents=[common_parser()], help="管道控制（abort/flush/reset）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--pipe", required=True, help="端点地址")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--abort", action="store_true")
+    g.add_argument("--flush", action="store_true")
+    g.add_argument("--reset", action="store_true")
+    s.set_defaults(func=run_command(_winusb_pipe))
+
+    s = ws.add_parser("echo", parents=[common_parser()], help="回环吞吐测试")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--out-pipe", required=True)
+    s.add_argument("--in-pipe", required=True)
+    s.add_argument("--size", type=int, default=64)
+    s.add_argument("--count", type=int, default=100, help="迭代次数（0=一直）")
+    s.add_argument("--pipeline", type=int, default=1, help="连续写 N 次再读回")
+    s.add_argument("--pattern", choices=("increment", "random", "zeros", "aa", "ff"), default="increment")
+    s.add_argument("--seed", type=int, default=0)
+    s.set_defaults(func=run_command(_winusb_echo))
 
     # ── USB HID（系统 HID 驱动，报告级） ─────────────────
     h = ps.add_parser("hid", help="USB HID 报告收发（系统 HID 驱动）")

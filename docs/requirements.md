@@ -25,7 +25,7 @@
 | **USB 描述符**（解析 / 校验 / 生成） | **无**，纯离线 | — |
 | **USB CDC 收发**（M3a 已实现） | 无额外组件（Windows 10+ 自带 `usbser`） | `omni usb cdc list` 为空时先看设备管理器 |
 | **USB HID 报告**（M3b 已实现） | 无额外组件（系统 HID 驱动）；设备被独占时打不开 | `omni usb hid list` 为空 / `hid_busy` |
-| **USB WinUSB 请求**（M3c 待实现） | 接口需绑定 WinUSB（MS OS 2.0 描述符或 INF） | 能枚举但打不开，提示驱动未绑定 |
+| **USB WinUSB 请求**（M3c 已实现） | 接口需绑定 WinUSB（MS OS 2.0 描述符或 INF）；WinUSB 不支持等时传输 | `omni usb winusb list` 为空 / `winusb_not_found` |
 | **USB 请求（旧：任意设备）** | 已被 WinUSB/HID/CDC 三条通道替代；任意设备需 UsbDk/自研驱动（见 `usb-raw-access.md`） | — |
 | **USB 抓包**（M1 已实现） | [USBPcap](https://desowin.org/usbpcap/) 1.5.4+（官方安装器，装完重启）；**管理员终端** | `omni usb doctor` 报未安装 / 非管理员，并给出下一步 |
 | **USB 测试**（M4a 已实现：离线 pcap 用例；动作步骤待 M4b） | 无额外组件（只需用例引用的 pcap 文件）；动作类步骤将来需要 WinUSB/USBPcap | `test run` 报 `pcap 不存在` 或用例格式错误 |
@@ -67,7 +67,7 @@ omni usb capture doctor        # 同上，抓包视角
 | USB 抓包（M1，已实现） | CLI 0.28.x / bus 0.2.x |
 | 描述符（M2，已实现） | CLI 0.29.x |
 | 请求（M3a CDC / M3b HID，已实现） | CLI 0.30.x |
-| 请求（M3c WinUSB） | 待实现 |
+| 请求（M3c WinUSB，已实现） | CLI 0.31.x |
 | 测试（M4a 离线用例，已实现） | CLI 0.32.x |
 
 > 里程碑与验收标准见 `omni-backend/docs/usb-plan.md`。
