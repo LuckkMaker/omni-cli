@@ -333,9 +333,14 @@ def test_auto_send():
 def test_help_category():
     print("[7] 分类帮助包含 net")
     from omni_cli.cli import COMMAND_CATEGORIES
-    bus_group = next(m for t, m in COMMAND_CATEGORIES if "串口与网络" in t)
-    check("net 与 serial 同属总线类", "net" in bus_group and "serial" in bus_group,
-          str(bus_group))
+    bus_group = next(
+        members for _title, members in COMMAND_CATEGORIES if "net" in members
+    )
+    check(
+        "net 与 serial/usb 同属总线类",
+        "net" in bus_group and "serial" in bus_group and "usb" in bus_group,
+        str(bus_group),
+    )
 
 
 def main() -> int:

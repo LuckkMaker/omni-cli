@@ -1,0 +1,1043 @@
+"""USB 命令组（bus 服务）：描述符 / 请求 / 抓包 / 测试。
+
+里程碑（见 ``omni-backend/docs/usb-plan.md``）：
+
+- M1 **已完成**：抓包接线（doctor / capture start|stop|status|transfers|detail|
+  devices|open|save）
+- M2 描述符（desc）
+- M3 请求（list / info / open / control / read / write / pipe / echo / replay）
+- M4 测试（test）
+
+未实现的叶子统一返回「尚未实现（计划 Mn）」，命令面在 M0 已固定，后续只换处理器。
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+from ..client import ApiClient
+from ..formatting import ctx_error, print_table
+from ..options import common_parser
+from ..runtime import finish, run_command
+
+#: 各能力对应的里程碑，用于未实现提示
+_MILESTONES = {
+    "desc": "M2",
+    "list": "M3",
+    "info": "M3",
+    "open": "M3",
+    "close": "M3",
+    "status": "M3",
+    "control": "M3",
+    "read": "M3",
+    "write": "M3",
+    "pipe": "M3",
+    "echo": "M3",
+    "replay": "M3",
+    "test": "M4",
+}
+
+#: 失败码 → 可执行的下一步
+_HINTS = {
+    "not_elevated": "需要管理员权限：以管理员身份重新打开终端后重试。",
+    "usbpcap_not_found": "未找到 USBPcapCMD.exe：安装 USBPcap 并重启，"
+    "或用 --usbpcap-path 指定路径。",
+    "capture_already_running": "已有捕获在运行：先执行 `omni usb capture stop`。",
+    "device_busy": "残留的 USBPcapCMD 可能仍占用 root hub："
+    "在任务管理器中以管理员身份结束它，或重启系统。",
+    "invalid_bufferlen": "bufferlen 取值范围 4096..134217728。",
+    "invalid_devices": "--devices 用逗号分隔设备地址，如 1,2,3。",
+    "unsupported_platform": "USB 抓包仅支持 Windows。",
+}
+
+_TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "方向", "类型", "长度", "状态", "摘要"]
+
+
+def _todo(feature: str):
+    """未实现处理器：不连接后端，直接给出计划与下一步。"""
+
+    milestone = _MILESTONES.get(feature, "后续")
+
+    def _handler(_args):
+        return ctx_error(
+            f"omni usb {feature} 尚未实现（计划 {milestone}）。"
+            "里程碑与验收见 omni-backend/docs/usb-plan.md。"
+        )
+
+    return _handler
+
+
+def _failure(data: dict, default: str) -> int:
+    """统一处理 ``{success:false, code, error}``：打印错误 + 可执行提示。"""
+    code = data.get("code") or ""
+    message = data.get("error") or default
+    hint = _HINTS.get(code)
+    return ctx_error(f"{message}\n  {hint}" if hint else message)
+
+
+def _ts_text(ts) -> str:
+    try:
+        value = float(ts)
+    except (TypeError, ValueError):
+        return "-"
+    if value <= 0:
+        return "-"
+    moment = datetime.fromtimestamp(value)
+    return f"{moment:%H:%M:%S}.{int((value % 1) * 1000):03d}"
+
+
+def _endpoint_text(address: int) -> str:
+    return f"0x{int(address):02X}"
+
+
+def _transfer_rows(items: list[dict]) -> list[list]:
+    rows = []
+    for item in items:
+        rows.append(
+            [
+                item.get("id"),
+                _ts_text(item.get("ts")),
+                f"{item.get('bus')}.{item.get('device')}",
+                _endpoint_text(item.get("endpoint", 0)),
+                str(item.get("direction", "")).upper(),
+                item.get("typeLabel") or "-",
+                item.get("length"),
+                item.get("statusName") or "-",
+                item.get("summary") or "",
+            ]
+        )
+    return rows
+
+
+def _transfer_line(item: dict) -> str:
+    """follow 模式的单行输出：列固定、不依赖表格宽度。"""
+    return (
+        f"{item.get('id'):>6}  {_ts_text(item.get('ts'))}  "
+        f"{item.get('bus')}.{item.get('device')}  "
+        f"{_endpoint_text(item.get('endpoint', 0))}  "
+        f"{str(item.get('direction', '')).upper():<3}  "
+        f"{(item.get('typeLabel') or '-'):<11}  "
+        f"{item.get('length'):>6}  "
+        f"{(item.get('statusName') or '-'):<10}  "
+        f"{item.get('summary') or ''}"
+    )
+
+
+def _print_transfers(items: list[dict]) -> None:
+    print_table(_TRANSFER_HEADERS, _transfer_rows(items))
+
+
+def _environment_text(env: dict) -> str:
+    lines = []
+    platform = env.get("platform") or env.get("supported")
+    lines.append(f"平台        : {platform}")
+    if not env.get("supported"):
+        lines.append("USBPcap     : 不支持（仅 Windows）")
+        lines.append("结论        : 抓包不可用；描述符解析等离线能力不受影响")
+        return "\n".join(lines)
+
+    installed = bool(env.get("installed"))
+    lines.append(f"USBPcap     : {'已安装' if installed else '未安装'}")
+    if installed:
+        lines.append(f"路径        : {env.get('path') or '-'}")
+    lines.append(f"管理员      : {'是' if env.get('elevated') else '否'}")
+    devices = env.get("devices") or []
+    if devices:
+        labels = ", ".join(str(item.get("label") or item.get("id")) for item in devices)
+        lines.append(f"可抓 root hub: {labels}")
+    else:
+        lines.append("可抓 root hub: 无")
+
+    warnings = env.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.append("警告:")
+        for item in warnings:
+            lines.append(f"  - {item}")
+
+    lines.append("")
+    if not installed:
+        lines.append(
+            "下一步: 安装 USBPcap（https://desowin.org/usbpcap/），安装后重启系统；"
+            "或用 --usbpcap-path 指定 USBPcapCMD.exe。"
+        )
+    elif not env.get("elevated"):
+        lines.append("下一步: 以管理员身份重新打开终端，再执行 capture start。")
+    elif not devices:
+        lines.append("下一步: 确认 USBPcap 驱动已随安装程序写入（必要时重启）。")
+    else:
+        lines.append("下一步: omni usb capture start（建议先 start 再插拔目标设备）")
+    return "\n".join(lines)
+
+
+def _doctor(c: ApiClient, args):
+    env = c.get("/api/usb/environment")
+    finish(args, env, _environment_text(env))
+    return 0
+
+
+def _pick_device(c: ApiClient, wanted: str | None) -> tuple[str | None, int]:
+    """选择 root hub：显式指定优先，否则要求环境中只有一个。"""
+    if wanted:
+        return wanted, 0
+    env = c.get("/api/usb/environment")
+    if not env.get("installed"):
+        return None, ctx_error(_environment_text(env))
+    devices = env.get("devices") or []
+    if len(devices) == 1:
+        return devices[0].get("id"), 0
+    if not devices:
+        return None, ctx_error(
+            "未枚举到 USBPcap root hub。请确认已安装 USBPcap 并重启，"
+            "然后执行 `omni usb capture doctor` 查看详情。"
+        )
+    listing = "\n".join(
+        f"  {item.get('id')}  {item.get('label')}" for item in devices
+    )
+    return None, ctx_error(f"检测到多个 root hub，请用 --device 指定：\n{listing}")
+
+
+def _capture_start(c: ApiClient, args):
+    device, code = _pick_device(c, args.device)
+    if device is None:
+        return code
+    payload = {
+        "device_id": device,
+        "usbpcap_path": args.usbpcap_path,
+        "snaplen": args.snaplen,
+        "bufferlen": args.bufferlen,
+        "devices": args.devices,
+    }
+    data = c.post("/api/usb/capture/start", payload)
+    if not data.get("success", True):
+        return _failure(data, "开始捕获失败")
+    finish(
+        args,
+        data,
+        f"已开始捕获 {device}\n抓包文件: {data.get('capturePath') or '-'}\n"
+        "提示: 建议先开始捕获再插拔目标设备，这样能抓到完整枚举。",
+    )
+    return 0
+
+
+def _capture_stop(c: ApiClient, args):
+    data = c.post("/api/usb/capture/stop")
+    if not data.get("success", True):
+        return _failure(data, "停止捕获失败")
+    totals = data.get("totals") or {}
+    finish(
+        args,
+        data,
+        f"已停止捕获（{totals.get('transfers', 0)} 条传输，"
+        f"{totals.get('bytes', 0)} 字节）",
+    )
+    return 0
+
+
+def _capture_status(c: ApiClient, args):
+    data = c.get("/api/usb/capture/status")
+    totals = data.get("totals") or {}
+    mode = data.get("mode") or "-"
+    running = "是" if data.get("running") else ("解析中" if data.get("loading") else "否")
+    text = "\n".join(
+        [
+            f"运行中      : {running}",
+            f"模式        : {mode}",
+            f"设备        : {data.get('deviceId') or '-'}",
+            f"开始时间    : {data.get('startedAt') or '-'}",
+            f"抓包文件    : {data.get('capturePath') or '-'}",
+            f"传输        : {totals.get('transfers', 0)}",
+            f"字节        : {totals.get('bytes', 0)}",
+            f"错误        : {totals.get('errors', 0)}",
+            f"未匹配      : {totals.get('unmatched', 0)}",
+            f"缓冲行      : {data.get('buffered', 0)} / {data.get('ringSize', 0)}",
+        ]
+    )
+    if data.get("lastError"):
+        text += f"\n最近错误    : {data['lastError']}"
+    finish(args, data, text)
+    return 0
+
+
+def _transfer_query(args, after_id: int | None) -> str:
+    parts = [f"limit={int(args.limit)}"]
+    if after_id is not None:
+        parts.append(f"after_id={int(after_id)}")
+    if getattr(args, "type", None):
+        parts.append("type=" + args.type)
+    if getattr(args, "dir", None):
+        parts.append("dir=" + args.dir)
+    for key, value in (("bus", args.bus), ("device", args.device), ("endpoint", args.endpoint)):
+        if value is not None:
+            parts.append(f"{key}={int(value)}")
+    if args.status:
+        parts.append("status=" + args.status)
+    if args.q:
+        from urllib.parse import quote
+
+        parts.append("q=" + quote(args.q))
+    return "&".join(parts)
+
+
+def _capture_transfers(c: ApiClient, args):
+    if not args.follow:
+        data = c.get(f"/api/usb/transfers?{_transfer_query(args, args.since)}")
+        items = data.get("items") or []
+        if args.json_:
+            finish(args, data, "")
+            return 0
+        if not items:
+            if not args.quiet:
+                print(
+                    "没有匹配的传输。抓包时先 `omni usb capture start`，"
+                    "再插拔/操作设备；离线分析用 `omni usb capture open --pcap F`。"
+                )
+            return 0
+        _print_transfers(items)
+        return 0
+
+    # --follow：用 after_id 轮询，Ctrl+C 正常退出
+    if args.since is not None:
+        cursor = args.since
+    else:
+        # 默认只跟新传输：先取当前 nextId，避免把环形缓存里的历史整段刷出来。
+        # 需要回放历史时显式 --since 0。
+        peek = c.get("/api/usb/transfers?limit=1")
+        cursor = int(peek.get("nextId") or 0)
+    interval = max(0.05, float(args.interval))
+    deadline = time.monotonic() + args.duration if args.duration else None
+    printed_header = False
+    waited_hint = False
+    try:
+        while True:
+            data = c.get(f"/api/usb/transfers?{_transfer_query(args, cursor)}")
+            items = data.get("items") or []
+            if items:
+                if args.json_:
+                    for item in items:
+                        print(json.dumps(item, ensure_ascii=False))
+                else:
+                    if not printed_header and not args.quiet:
+                        print(
+                            "     ID  时间         设备  端点  方向  类型          长度  状态      摘要"
+                        )
+                        printed_header = True
+                    for item in items:
+                        print(_transfer_line(item))
+                cursor = int(items[-1]["id"])
+                sys.stdout.flush()
+            elif not args.json_ and not waited_hint and not args.quiet:
+                print("等待传输…（Ctrl+C 结束）", file=sys.stderr)
+                waited_hint = True
+
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        if not args.quiet:
+            print("\n已停止跟踪", file=sys.stderr)
+        return 0
+    return 0
+
+
+def _render_tree(nodes: list[dict], indent: int = 0) -> list[str]:
+    lines = []
+    pad = "  " * indent
+    for node in nodes:
+        title = node.get("title") or node.get("label") or ""
+        value = node.get("value")
+        lines.append(f"{pad}{title}: {value}" if value else f"{pad}{title}")
+        for field in node.get("fields") or []:
+            lines.append(f"{pad}  {field.get('name')}: {field.get('value')}")
+        lines.extend(_render_tree(node.get("children") or [], indent + 1))
+    return lines
+
+
+def _capture_detail(c: ApiClient, args):
+    data = c.get(f"/api/usb/transfers/{int(args.transfer_id)}")
+    if not data.get("success", True):
+        return _failure(data, "详情不可用")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+
+    lines = [
+        f"#{data.get('id')}  {data.get('typeLabel')} "
+        f"{str(data.get('direction', '')).upper()} 0x{int(data.get('endpoint', 0)):02X}  "
+        f"{data.get('statusName')}  {data.get('length')} B  {_ts_text(data.get('ts'))}",
+        "",
+    ]
+    if data.get("setupHex"):
+        lines.append(f"SETUP: {data['setupHex']}")
+    lines.append(f"摘要 : {data.get('summary') or '-'}")
+    tree = data.get("decodeTree") or []
+    if tree:
+        lines.append("")
+        lines.append("解码:")
+        lines.extend("  " + line for line in _render_tree(tree))
+    hex_text = data.get("dataHex") or ""
+    if hex_text:
+        lines.append("")
+        lines.append("数据:")
+        hex_bytes = hex_text.split()
+        for offset in range(0, len(hex_bytes), 16):
+            chunk = hex_bytes[offset : offset + 16]
+            ascii_part = ""
+            for byte in chunk:
+                value = int(byte, 16)
+                ascii_part += chr(value) if 32 <= value < 127 else "."
+            lines.append(
+                f"  {offset:04X}  {' '.join(chunk):<47}  {ascii_part}"
+            )
+        if data.get("dataTruncated"):
+            lines.append(
+                f"  … 共 {data.get('dataLength')} 字节，仅显示前 {len(hex_bytes)} 字节；"
+                "完整数据请导出 pcap。"
+            )
+    finish(args, data, "\n".join(lines))
+    return 0
+
+
+def _capture_devices(c: ApiClient, args):
+    data = c.get("/api/usb/devices")
+    tree = data.get("tree") or []
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if not tree:
+        finish(
+            args,
+            data,
+            "没有捕获到描述符。抓包开始晚于设备枚举时会出现这种情况："
+            "先 start，再插拔设备。",
+        )
+        return 0
+    finish(args, data, "\n".join(_render_tree(tree)))
+    return 0
+
+
+def _capture_open(c: ApiClient, args):
+    data = c.post("/api/usb/capture/open", {"path": args.pcap})
+    if not data.get("success", True):
+        return _failure(data, "打开 pcap 失败")
+    if args.no_wait:
+        finish(args, data, f"已开始解析 {args.pcap}（后台进行）")
+        return 0
+
+    deadline = time.monotonic() + 1800  # 解析大文件可能需要几分钟
+    last_percent = -1
+    try:
+        while time.monotonic() < deadline:
+            status = c.get("/api/usb/capture/status")
+            if not status.get("loading"):
+                break
+            progress = status.get("progress") or {}
+            percent = int(progress.get("percent", -1))
+            if not args.quiet and percent >= 0 and percent != last_percent:
+                print(f"\r解析中… {percent}%", end="", file=sys.stderr, flush=True)
+                last_percent = percent
+            time.sleep(0.2)
+        else:
+            return ctx_error(
+                "解析超时（30 分钟）。可用 --no-wait 先返回，再用 "
+                "`omni usb capture status` 查看进度。"
+            )
+    except KeyboardInterrupt:
+        if not args.quiet:
+            print("\n已停止等待（后台解析继续）", file=sys.stderr)
+        return 0
+    if not args.quiet and last_percent >= 0:
+        print("", file=sys.stderr)
+
+    status = c.get("/api/usb/capture/status")
+    if status.get("lastError"):
+        return ctx_error(status["lastError"])
+    totals = status.get("totals") or {}
+    if args.json_:
+        finish(args, status, "")
+        return 0
+    finish(
+        args,
+        status,
+        f"已解析 {args.pcap}\n传输: {totals.get('transfers', 0)}  "
+        f"错误: {totals.get('errors', 0)}  未匹配: {totals.get('unmatched', 0)}",
+    )
+    return 0
+
+
+def _capture_save(c: ApiClient, args):
+    data = c.post("/api/usb/capture/save", {"path": args.out})
+    if not data.get("success", True):
+        return _failure(data, "导出失败")
+    finish(args, data, f"已导出到 {data.get('path') or args.out}")
+    return 0
+
+
+def _load_json(path: str) -> dict:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"无法读取 {path}：{exc}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} 不是合法 JSON：{exc}") from None
+
+
+def _document_lines(doc: dict) -> list[str]:
+    """把描述符文档渲染成人读的摘要（不展开原始 hex，hex 由 build/emit 给）。"""
+    lines: list[str] = []
+    device = doc.get("device") or {}
+    if device:
+        lines.append(
+            "设备: VID {vid}  PID {pid}  bcdUSB {bcd}  类 {cls}/{sub}/{proto}  EP0 {ep}".format(
+                vid=device.get("vid", "-"),
+                pid=device.get("pid", "-"),
+                bcd=device.get("bcdUSB", "-"),
+                cls=device.get("class", 0),
+                sub=device.get("subClass", 0),
+                proto=device.get("protocol", 0),
+                ep=device.get("maxPacketSize0", "-"),
+            )
+        )
+    for index, config in enumerate(doc.get("configurations") or [], 1):
+        interfaces = config.get("interfaces") or []
+        lines.append(
+            f"配置 {config.get('value', index)}: {config.get('maxPower', 0)} mA，"
+            f"{len(interfaces)} 接口，属性 {config.get('attributes', '-')}"
+        )
+        for item in config.get("classDescriptors") or []:
+            lines.append(
+                f"  类描述符 {item.get('type')} "
+                + (f"subtype {item.get('subtype')} " if item.get("subtype") is not None else "")
+                + f"hex {item.get('hex', '-')}"
+            )
+        for interface in interfaces:
+            for alt in interface.get("alternates") or []:
+                lines.append(
+                    f"  接口 {interface.get('number')} alt {alt.get('alternate', 0)}: "
+                    f"class {alt.get('class', '-')}/{alt.get('subClass', 0)}/"
+                    f"{alt.get('protocol', 0)}，{len(alt.get('endpoints') or [])} 端点"
+                )
+                for descriptor in alt.get("classDescriptors") or []:
+                    lines.append(
+                        f"    类描述符 {descriptor.get('type')} "
+                        + (
+                            f"subtype {descriptor.get('subtype')} "
+                            if descriptor.get("subtype") is not None
+                            else ""
+                        )
+                        + f"hex {descriptor.get('hex', '-')}"
+                    )
+                for endpoint in alt.get("endpoints") or []:
+                    address = endpoint.get("address", "0x00")
+                    value = int(str(address), 0)
+                    direction = "IN" if value & 0x80 else "OUT"
+                    kind = {0: "control", 1: "iso", 2: "bulk", 3: "interrupt"}.get(
+                        int(str(endpoint.get("attributes", "0")), 0) & 0x03, "?"
+                    )
+                    lines.append(
+                        f"    端点 {address} {direction} {kind} "
+                        f"max {endpoint.get('maxPacketSize')} interval {endpoint.get('interval')}"
+                    )
+    strings = doc.get("strings") or {}
+    if strings:
+        lines.append("字符串:")
+        for lang, table in strings.items():
+            for index, text in table.items():
+                lines.append(f"  {lang} [{index}] {text}")
+    return lines
+
+
+def _setup_lines(setup: dict, raw_hex: str) -> list[str]:
+    lines = [
+        f"SETUP {raw_hex}",
+        f"  {setup.get('requestName')}  {str(setup.get('direction', '')).upper()}  "
+        f"{setup.get('type')} → {setup.get('recipient')}",
+        f"  wValue 0x{int(setup.get('wValue', 0)):04X}  "
+        f"wIndex 0x{int(setup.get('wIndex', 0)):04X}  "
+        f"wLength {setup.get('wLength', 0)}",
+    ]
+    decoded = setup.get("decoded") or {}
+    if decoded:
+        lines.append("  解码: " + "  ".join(f"{key}={value}" for key, value in decoded.items()))
+    return lines
+
+
+def _desc_parse(c: ApiClient, args):
+    if args.hex:
+        payload = {"hex": args.hex}
+    elif args.file:
+        try:
+            data = Path(args.file).read_bytes()
+        except OSError as exc:
+            return ctx_error(f"无法读取 {args.file}：{exc}")
+        payload = {"dataB64": base64.b64encode(data).decode("ascii")}
+    else:
+        payload = {"hex": sys.stdin.read()}
+
+    data = c.post("/api/usb/desc/parse", payload)
+    if not data.get("success"):
+        return _failure(data, "解析失败")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+
+    kind = data.get("kind")
+    if kind == "setup":
+        text = "\n".join(_setup_lines(data.get("setup") or {}, data.get("hex") or ""))
+    elif data.get("document"):
+        text = "\n".join(_document_lines(data["document"]))
+    elif kind == "string":
+        text = f"字符串（{data.get('length')} 字节）: {data.get('text')!r}"
+    elif kind == "qualifier":
+        text = "设备限定符: " + "  ".join(
+            f"{key}={value}" for key, value in (data.get("fields") or {}).items()
+        )
+    else:
+        text = f"未识别的数据（{data.get('length')} 字节）: {data.get('hex')}"
+    finish(args, data, text)
+    return 0
+
+
+def _desc_validate(c: ApiClient, args):
+    try:
+        document = _load_json(args.file)
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    data = c.post("/api/usb/desc/validate", {"document": document})
+    if not data.get("success"):
+        return _failure(data, "校验失败")
+    if args.json_:
+        finish(args, data, "")
+        return 0 if data.get("ok") else 1
+
+    lines = []
+    for item in data.get("errors") or []:
+        lines.append(f"错误 [{item.get('code')}] {item.get('path')}: {item.get('message')}")
+    for item in data.get("warnings") or []:
+        lines.append(f"警告 [{item.get('code')}] {item.get('path')}: {item.get('message')}")
+    if data.get("ok"):
+        lines.append(f"校验通过（{len(data.get('warnings') or [])} 条警告）")
+    finish(args, data, "\n".join(lines))
+    return 0 if data.get("ok") else 1
+
+
+def _built_lines(data: dict) -> list[str]:
+    lines = []
+    if data.get("device"):
+        lines.append(f"设备        : {data['device']}")
+    for item in data.get("configurations") or []:
+        lines.append(f"配置 {item.get('value')} ({item.get('totalLength')} B): {item.get('hex')}")
+    for item in data.get("strings") or []:
+        lines.append(f"字符串 {item.get('index')} ({item.get('langId')}): {item.get('hex')}")
+    if data.get("bos"):
+        lines.append(f"BOS         : {data['bos']}")
+    validation = data.get("validation") or {}
+    errors = len(validation.get("errors") or [])
+    warnings = len(validation.get("warnings") or [])
+    lines.append(f"校验        : {'通过' if validation.get('ok') else '未通过'}（{errors} 错误，{warnings} 警告）")
+    for item in validation.get("errors") or []:
+        lines.append(f"  错误 [{item.get('code')}] {item.get('message')}")
+    return lines
+
+
+def _desc_build(c: ApiClient, args):
+    try:
+        document = _load_json(args.file)
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    data = c.post("/api/usb/desc/build", {"document": document})
+    if not data.get("success"):
+        return _failure(data, "生成失败")
+
+    if args.out:
+        try:
+            Path(args.out).write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            return ctx_error(f"无法写入 {args.out}：{exc}")
+
+    if args.json_:
+        finish(args, data, "")
+    else:
+        finish(args, data, "\n".join(_built_lines(data)))
+    return 0 if (data.get("validation") or {}).get("ok") else 1
+
+
+def _desc_emit(c: ApiClient, args):
+    try:
+        document = _load_json(args.file)
+    except ValueError as exc:
+        return ctx_error(str(exc))
+    data = c.post("/api/usb/desc/build", {"document": document})
+    if not data.get("success"):
+        return _failure(data, "生成失败")
+
+    if args.format == "json":
+        text = json.dumps(data, ensure_ascii=False, indent=2)
+    else:
+        lines = [data["device"]] if data.get("device") else []
+        lines.extend(item["hex"] for item in data.get("configurations") or [])
+        lines.extend(item["hex"] for item in data.get("strings") or [])
+        if data.get("bos"):
+            lines.append(data["bos"])
+        text = "\n".join(lines)
+
+    if args.out:
+        try:
+            Path(args.out).write_text(text + "\n", encoding="utf-8")
+        except OSError as exc:
+            return ctx_error(f"无法写入 {args.out}：{exc}")
+    if not args.quiet:
+        print(text)
+    return 0 if (data.get("validation") or {}).get("ok") else 1
+
+
+def _desc_template_list(c: ApiClient, args):
+    data = c.get("/api/usb/desc/templates")
+    items = data.get("templates") or []
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    print_table(["模板", "说明"], [[item.get("name"), item.get("description")] for item in items])
+    return 0
+
+
+def _desc_template_show(c: ApiClient, args):
+    data = c.get(f"/api/usb/desc/templates/{args.name}")
+    if not data.get("success", True):
+        return _failure(data, "模板不存在")
+    document = data.get("document") or {}
+    finish(
+        args,
+        document,
+        "\n".join(_document_lines(document)) or json.dumps(document, ensure_ascii=False, indent=2),
+    )
+    return 0
+
+
+def _desc_from_capture(c: ApiClient, args):
+    payload: dict = {"path": args.pcap}
+    if args.bus is not None:
+        payload["bus"] = args.bus
+    if args.device is not None:
+        payload["device"] = args.device
+    data = c.post("/api/usb/desc/from-capture", payload)
+    if not data.get("success", True):
+        return _failure(data, "反推失败")
+    documents = data.get("documents") or []
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if not documents:
+        finish(
+            args,
+            data,
+            "pcap 中没有完整的描述符。抓包需覆盖设备枚举"
+            "（先 start 再插拔），或用 `omni usb capture open` 确认能解析到 GET_DESCRIPTOR。",
+        )
+        return 0
+    blocks = []
+    for item in documents:
+        blocks.append(f"=== bus {item['bus']} device {item['device']} ===")
+        blocks.extend(_document_lines(item["document"]))
+    finish(args, data, "\n".join(blocks))
+    return 0
+
+
+def _test_run(c: ApiClient, args):
+    try:
+        case = _load_json(args.file)
+    except ValueError as exc:
+        return ctx_error(str(exc))
+
+    # pcap 相对路径按用例文件所在目录解析，避免依赖调用者的 cwd
+    pcap = case.get("pcap")
+    if pcap and not Path(str(pcap)).is_absolute():
+        case["pcap"] = str((Path(args.file).resolve().parent / str(pcap)).resolve())
+
+    payload = {
+        "case": case,
+        "junit": bool(args.junit),
+        "stopOnFailure": not args.keep_going,
+    }
+    data = c.post("/api/usb/test/run", payload)
+    if not data.get("success", True):
+        return _failure(data, "用例执行失败")
+
+    if args.junit:
+        xml = data.get("junit")
+        if not xml:
+            return ctx_error("后端没有返回 JUnit 报告（确认后端版本支持 --junit）")
+        try:
+            Path(args.junit).write_text(xml, encoding="utf-8")
+        except OSError as exc:
+            return ctx_error(f"无法写入 {args.junit}：{exc}")
+
+    if args.json_:
+        finish(args, data, "")
+    else:
+        report = data
+        summary = report.get("summary") or {}
+        lines = [
+            f"用例 {report.get('name')}: {'PASS' if report.get('ok') else 'FAIL'}"
+            f"（{summary.get('passed', 0)}/{summary.get('steps', 0)} 步，"
+            f"{report.get('durationMs', 0)} ms）"
+        ]
+        for step in report.get("steps") or []:
+            mark = "PASS" if step.get("ok") else "FAIL"
+            lines.append(
+                f"  {mark}  [{step.get('index')}] {step.get('name')} — {step.get('detail')}"
+            )
+        if args.junit:
+            lines.append(f"JUnit 已写入 {args.junit}")
+        finish(args, data, "\n".join(lines))
+    return 0 if data.get("ok") else 1
+
+
+def _test_list(c: ApiClient, args):
+    data = c.get("/api/usb/test/schema")
+    example = data.get("example") or {}
+    finish(
+        args,
+        data,
+        "用例格式（M4a：离线 pcap + expect 断言）:\n"
+        + json.dumps(example, ensure_ascii=False, indent=2)
+        + "\n\n可用断言: transfers / transfer / device / errors / descriptor\n"
+        "动作步骤（control/write/read/echo）需要 usb_host（M4b）。\n"
+        "示例: omni usb test run --file case.json --junit report.xml",
+    )
+    return 0
+
+
+def add_parser(sub):
+    p = sub.add_parser(
+        "usb",
+        help="USB 描述符 / 请求 / 抓包 / 测试（bus 服务）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "USB 开发工作台：枚举设备、发控制/批量请求、生成与校验描述符、"
+            "用 USBPcap 抓包分析、跑回归用例。"
+        ),
+        epilog=(
+            "示例:\n"
+            "  omni usb doctor\n"
+            "  omni usb capture start --devices 1,2\n"
+            "  omni usb capture transfers --follow\n"
+            "  omni usb capture open --pcap sess.pcap --json\n"
+            "  omni usb desc parse --hex \"80 06 00 01 00 00 12 00\"\n"
+            "  omni usb open --vid 0xC251 --pid 0x0002\n"
+            "  omni usb test run --file case.json --json\n"
+            "\n"
+            "抓包需要安装 USBPcap 并以管理员身份运行；描述符与请求功能不需要。"
+        ),
+    )
+    ps = p.add_subparsers(dest="usb_sub", metavar="<sub>")
+
+    # ── 环境诊断 ──────────────────────────────────────────
+    s = ps.add_parser("doctor", parents=[common_parser()], help="环境诊断（USBPcap / 管理员 / WinUSB）")
+    s.set_defaults(func=run_command(_doctor))
+
+    # ── 设备与请求（M3） ──────────────────────────────────
+    s = ps.add_parser("list", parents=[common_parser()], help="枚举 USB 设备（SetupAPI）")
+    s.add_argument("--all", action="store_true", help="列出全部 USB 设备（含驱动服务名）")
+    s.add_argument("--vid", help="按 VID 过滤，如 0xC251")
+    s.add_argument("--pid", help="按 PID 过滤，如 0x0002")
+    s.add_argument("--guid", action="append", metavar="GUID", help="设备接口 GUID（可重复）")
+    s.set_defaults(func=_todo("list"))
+
+    s = ps.add_parser("info", parents=[common_parser()], help="设备/配置/接口/端点详情")
+    s.add_argument("--index", type=int, help="设备序号（list 输出）")
+    s.add_argument("--vid")
+    s.add_argument("--pid")
+    s.add_argument("--hex", action="store_true", help="附带原始描述符")
+    s.set_defaults(func=_todo("info"))
+
+    s = ps.add_parser("open", parents=[common_parser()], help="打开设备接口（独占）")
+    s.add_argument("--id", default="cli", metavar="ID", help="会话 ID（默认 cli）")
+    s.add_argument("--index", type=int, help="设备序号")
+    s.add_argument("--vid")
+    s.add_argument("--pid")
+    s.add_argument("--interface", type=int, default=0, help="接口号（默认 0）")
+    s.add_argument("--timeout-ms", type=int, default=1000, help="传输超时毫秒（默认 1000）")
+    s.set_defaults(func=_todo("open"))
+
+    s = ps.add_parser("close", parents=[common_parser()], help="关闭会话（幂等）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.set_defaults(func=_todo("close"))
+
+    s = ps.add_parser("status", parents=[common_parser()], help="查询会话状态")
+    s.add_argument("--id", default="cli", metavar="ID", help="会话 ID（省略则列出全部）")
+    s.set_defaults(func=_todo("status"))
+
+    s = ps.add_parser("control", parents=[common_parser()], help="控制传输（Setup + 数据段）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--request-type", help="bmRequestType，如 0x80（优先于方向/类型/接收者）")
+    s.add_argument("--direction", choices=("in", "out"), default="in")
+    s.add_argument("--type", choices=("standard", "class", "vendor"), default="standard")
+    s.add_argument("--recipient", choices=("device", "interface", "endpoint", "other"), default="device")
+    s.add_argument("--request", required=True, help="bRequest，如 0x06")
+    s.add_argument("--value", default="0", help="wValue，如 0x0100")
+    s.add_argument("--index", default="0", help="wIndex")
+    s.add_argument("--length", default="0", help="wLength（IN 传输的期望长度）")
+    s.add_argument("--data", help="OUT 数据（十六进制）")
+    s.add_argument("--file", help="OUT 数据文件")
+    s.add_argument("--decode", action="store_true", help="按请求自动解析响应")
+    s.set_defaults(func=_todo("control"))
+
+    s = ps.add_parser("read", parents=[common_parser()], help="IN 传输（批量/中断）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--pipe", required=True, help="端点地址，如 0x81")
+    s.add_argument("--length", type=int, required=True, help="单次读取字节数")
+    s.add_argument("--count", type=int, default=1, help="读取次数（0=持续）")
+    s.add_argument("--out", metavar="FILE", help="写入文件")
+    s.add_argument("--timeout-ms", type=int, default=1000)
+    s.add_argument("--hex", action="store_true", help="十六进制转储")
+    s.set_defaults(func=_todo("read"))
+
+    s = ps.add_parser("write", parents=[common_parser()], help="OUT 传输（批量/中断）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--pipe", required=True, help="端点地址，如 0x01")
+    s.add_argument("--data", help="十六进制数据")
+    s.add_argument("--file", help="数据文件")
+    s.add_argument("--chunk", type=int, help="按包长拆分（默认整包一次提交）")
+    s.add_argument("--repeat", type=int, default=1)
+    s.add_argument("--timeout-ms", type=int, default=1000)
+    s.set_defaults(func=_todo("write"))
+
+    s = ps.add_parser("pipe", parents=[common_parser()], help="管道控制（abort/flush/reset）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--pipe", required=True, help="端点地址")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--abort", action="store_true")
+    g.add_argument("--flush", action="store_true")
+    g.add_argument("--reset", action="store_true")
+    s.set_defaults(func=_todo("pipe"))
+
+    s = ps.add_parser("echo", parents=[common_parser()], help="回环自检（吞吐 / 一致性）")
+    s.add_argument("--id", default="cli", metavar="ID")
+    s.add_argument("--out-pipe", help="OUT 端点（默认自动选）")
+    s.add_argument("--in-pipe", help="IN 端点（默认自动选）")
+    s.add_argument("--size", type=int, help="每次传输字节数（默认取端点最大包长）")
+    s.add_argument("--count", type=int, default=100, help="迭代次数")
+    s.add_argument("--pipeline", type=int, default=1, help="连续写 N 次再读回（暴露单缓冲缺陷）")
+    s.add_argument("--pattern", choices=("increment", "random", "zeros", "aa", "ff"), default="increment")
+    s.add_argument("--seed", type=int)
+    s.add_argument("--keep-going", action="store_true", help="出错后继续剩余迭代")
+    s.set_defaults(func=_todo("echo"))
+
+    # ── 描述符（M2） ──────────────────────────────────────
+    d = ps.add_parser("desc", help="描述符解析 / 校验 / 生成 / 模板")
+    ds = d.add_subparsers(dest="usb_desc_sub", metavar="<sub>")
+
+    s = ds.add_parser("parse", parents=[common_parser()], help="解析描述符或 Setup 包")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--hex", help="十六进制字节，如 \"12 01 00 02 ...\"")
+    g.add_argument("--file", help="从文件读取原始字节")
+    g.add_argument("--stdin", action="store_true", help="从标准输入读取十六进制")
+    s.set_defaults(func=run_command(_desc_parse))
+
+    s = ds.add_parser("validate", parents=[common_parser()], help="校验描述符文档（JSON）")
+    s.add_argument("--file", required=True, help="描述符文档路径")
+    s.set_defaults(func=run_command(_desc_validate))
+
+    s = ds.add_parser("build", parents=[common_parser()], help="由 JSON 文档生成 hex")
+    s.add_argument("--file", required=True, help="描述符文档路径")
+    s.add_argument("--out", metavar="FILE", help="输出文件（JSON 结果）")
+    s.set_defaults(func=run_command(_desc_build))
+
+    s = ds.add_parser("emit", parents=[common_parser()], help="导出（hex / json）")
+    s.add_argument("--file", required=True, help="描述符文档路径")
+    s.add_argument("--format", choices=("hex", "json"), default="hex")
+    s.add_argument("--out", metavar="FILE")
+    s.set_defaults(func=run_command(_desc_emit))
+
+    s = ds.add_parser("from-capture", parents=[common_parser()], help="从离线 pcap 反推描述符文档")
+    s.add_argument("--pcap", required=True, metavar="FILE", help="pcap 文件")
+    s.add_argument("--bus", type=int)
+    s.add_argument("--device", type=int)
+    s.set_defaults(func=run_command(_desc_from_capture))
+
+    t = ds.add_parser("template", help="内置模板")
+    ts = t.add_subparsers(dest="usb_template_sub", metavar="<sub>")
+    s = ts.add_parser("list", parents=[common_parser()], help="列出模板")
+    s.set_defaults(func=run_command(_desc_template_list))
+    s = ts.add_parser("show", parents=[common_parser()], help="显示模板文档")
+    s.add_argument("name", help="模板名，如 cdc-acm")
+    s.set_defaults(func=run_command(_desc_template_show))
+
+    # ── 抓包（M1） ────────────────────────────────────────
+    c = ps.add_parser("capture", help="USBPcap 实时抓包 / 离线解析")
+    cs = c.add_subparsers(dest="usb_capture_sub", metavar="<sub>")
+
+    s = cs.add_parser("doctor", parents=[common_parser()], help="USBPcap 安装 / 权限 / root hub 诊断")
+    s.set_defaults(func=run_command(_doctor))
+
+    s = cs.add_parser("start", parents=[common_parser()], help="开始抓包（需要管理员）")
+    s.add_argument("--device", help="root hub，如 \\\\.\\USBPcap1（唯一时自动选择）")
+    s.add_argument("--snaplen", type=int, help="快照长度（默认由后端决定）")
+    s.add_argument("--bufferlen", type=int, help="USBPcap 内部缓冲（4096..134217728）")
+    s.add_argument("--devices", help="只抓指定设备地址，如 1,2,3")
+    s.add_argument("--usbpcap-path", metavar="PATH", help="USBPcapCMD.exe 路径")
+    s.set_defaults(func=run_command(_capture_start))
+
+    s = cs.add_parser("stop", parents=[common_parser()], help="停止抓包（幂等）")
+    s.set_defaults(func=run_command(_capture_stop))
+
+    s = cs.add_parser("status", parents=[common_parser()], help="抓包状态与统计")
+    s.set_defaults(func=run_command(_capture_status))
+
+    s = cs.add_parser("transfers", parents=[common_parser()], help="查询传输（增量 / 持续跟踪）")
+    s.add_argument("--since", type=int, metavar="ID", help="从该传输 ID 之后开始")
+    s.add_argument("--follow", action="store_true", help="持续跟踪（Ctrl+C 结束）")
+    s.add_argument("--limit", type=int, default=200)
+    s.add_argument("--interval", type=float, default=0.3, help="follow 轮询间隔秒数（默认 0.3）")
+    s.add_argument("--duration", type=float, default=0.0, help="follow 持续秒数（默认 0=一直）")
+    s.add_argument("--type", help="control,bulk,interrupt,isochronous")
+    s.add_argument("--dir", choices=("in", "out"))
+    s.add_argument("--bus", type=int)
+    s.add_argument("--device", type=int)
+    s.add_argument("--endpoint", type=int)
+    s.add_argument("--status", help="ok / error")
+    s.add_argument("--q", help="摘要/设备号文本搜索")
+    s.set_defaults(func=run_command(_capture_transfers))
+
+    s = cs.add_parser("detail", parents=[common_parser()], help="单条传输详情")
+    s.add_argument("transfer_id", type=int, help="传输 ID")
+    s.set_defaults(func=run_command(_capture_detail))
+
+    s = cs.add_parser("devices", parents=[common_parser()], help="从抓包重建的设备树")
+    s.set_defaults(func=run_command(_capture_devices))
+
+    s = cs.add_parser("open", parents=[common_parser()], help="离线打开 pcap（无需 USBPcap）")
+    s.add_argument("--pcap", required=True, metavar="FILE")
+    s.add_argument("--no-wait", action="store_true", help="不等待解析完成（配合 --json）")
+    s.set_defaults(func=run_command(_capture_open))
+
+    s = cs.add_parser("save", parents=[common_parser()], help="导出当前抓包文件")
+    s.add_argument("--out", required=True, metavar="FILE")
+    s.set_defaults(func=run_command(_capture_save))
+
+    s = cs.add_parser("replay", parents=[common_parser()], help="在真实设备上重放抓包中的一条传输")
+    s.add_argument("transfer_id", type=int, help="传输 ID")
+    s.add_argument("--id", dest="session", default="cli", metavar="ID", help="目标会话（默认 cli）")
+    s.set_defaults(func=_todo("replay"))
+
+    # ── 测试（M4） ────────────────────────────────────────
+    t = ps.add_parser("test", help="声明式回归用例")
+    ts = t.add_subparsers(dest="usb_test_sub", metavar="<sub>")
+
+    s = ts.add_parser("run", parents=[common_parser()], help="执行用例")
+    s.add_argument("--file", required=True, metavar="FILE", help="用例 JSON")
+    s.add_argument("--junit", metavar="FILE", help="输出 JUnit XML")
+    s.add_argument("--keep-going", action="store_true", help="失败后继续剩余步骤")
+    s.set_defaults(func=run_command(_test_run))
+
+    s = ts.add_parser("list", parents=[common_parser()], help="列出内置用例")
+    s.set_defaults(func=run_command(_test_list))

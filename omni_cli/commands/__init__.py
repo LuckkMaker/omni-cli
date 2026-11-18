@@ -23,6 +23,7 @@ from . import system
 from . import target
 from . import tool
 from . import toolchain
+from . import usb
 
 _MODULES = (
     backend,
@@ -45,6 +46,7 @@ _MODULES = (
     target,
     tool,
     toolchain,
+    usb,
 )
 
 

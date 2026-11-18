@@ -38,11 +38,16 @@ def service_for(args) -> str:
 
 
 def leaf_subcommand(args) -> str:
-    """取叶子子命令名（各模块的 subparser 都叫 ``*_sub``）。"""
+    """取叶子子命令名（各模块的 subparser 都叫 ``*_sub``）。
+
+    嵌套命令组（如 ``usb capture status``）会同时存在 ``usb_sub`` 与
+    ``usb_capture_sub``；按解析顺序取**最后一个**非空值，才是真正的叶子。
+    """
+    leaf = ""
     for key, value in vars(args).items():
-        if key.endswith("_sub") and isinstance(value, str):
-            return value
-    return ""
+        if key.endswith("_sub") and isinstance(value, str) and value:
+            leaf = value
+    return leaf
 
 
 def reject_managed(args) -> str | None:
