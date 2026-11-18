@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.28.0**（USB 能力）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.28.1**（CLI 呈现统一）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 
@@ -143,10 +143,10 @@ OMNI Link / OMNI Bus **不再内置** CLI：安装包只带各自后端，`omni`
 ## 构建与发布
 
 ```powershell
-.\build.ps1                      # 只构建 dist\omni.exe（PyInstaller 单文件）
-.\build.ps1 -Installer           # 额外生成 dist\OMNI-CLI-<ver>-x64-setup.exe
-.\build.ps1 -Release             # 发布包：exe + wheel + portable zip + SHA256（可签名）
-.\build.ps1 -Release -Installer  # 发布包 + Windows 安装包
+.\build.ps1                      # 默认一次出三种：exe + wheel/portable zip + Setup.exe
+.\build.ps1 -Exe                 # 只构建 dist\omni.exe（PyInstaller 单文件）
+.\build.ps1 -NoRelease           # 跳过发布包，只出 exe + Setup.exe
+.\build.ps1 -NoInstaller         # 跳过安装包（未装 NSIS 时）
 .\build.ps1 -Plan                # 只打印将执行的命令，不构建
 ```
 

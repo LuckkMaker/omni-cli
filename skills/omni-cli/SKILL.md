@@ -1,6 +1,6 @@
 ---
 name: "omni-cli"
-description: "用 omni CLI（omni-cli 0.28.0+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
+description: "用 omni CLI（omni-cli 0.28.1+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
 ---
 
 # OMNI CLI 实机联调
@@ -23,7 +23,7 @@ description: "用 omni CLI（omni-cli 0.28.0+）在真实硬件上联调：经�
 
 | 项 | 本机实测值 |
 |----|-----------|
-| CLI | `omni 0.28.0`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
+| CLI | `omni 0.28.1`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
 | 安装位置 | wheel：`powershell -File scripts\cli-package.ps1`（在 omni-cli 仓）；源码态用 `python -m omni_cli`（`PYTHONPATH` 指向 omni-cli 仓） |
 | 后端 | 独立仓库 `D:\workspace\embedded\omni-backend`，两个服务：`link`（探针/烧录/RTT/调试）与 `bus`（串口/网络/USB）；源码态 `link/server.py`、`bus/server.py` |
 | 后端接入 | 常驻 `omni backend start [link\|bus]` / `--managed`（临时拉起）/ `--backend-port`（接管已有） |

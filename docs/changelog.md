@@ -3,7 +3,7 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
-## 未发布
+## 0.28.1（2026-11-18）
 
 - CLI 呈现统一到 `python -h` / `pip -h` 的风格：帮助只做缩进对齐与按显示宽度折行，
   不加颜色和符号装饰；分组标题改用英文（`Backend` / `Debug & Flash` / `Project Build` /
@@ -13,6 +13,8 @@
   统一「查询状态」「开启/关闭」等句式。
 - `omni build` 输出去掉 `›` / `✓` / `✗` / `·` 等装饰，结论行改为纯文本（着色仍由 `--color` 控制）。
 - `omni usb capture open` 的解析进度只在终端原地刷新，管道/重定向下不输出。
+- `build.ps1` 默认一次构建三种产物（exe + wheel/portable zip + Setup.exe）；
+  只想出 exe 用 `-Exe`，跳过安装包用 `-NoInstaller`，跳过发布包用 `-NoRelease`。
 
 ## 0.28.0（USB 能力）
 
