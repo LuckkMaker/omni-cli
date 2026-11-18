@@ -32,6 +32,16 @@ omni (本包)
 
 ## 版本记录
 
+### 0.28.0（USB 能力）
+
+- 新增 `omni usb` 命令组：诊断、抓包、描述符、请求、回归用例。
+- 抓包：`doctor`、`capture start|stop|status|transfers(--follow)|detail|devices|open|save`。
+- 描述符：`desc parse|validate|build|emit|template|from-capture`（hex / JSON）。
+- 请求：`usb cdc`（复用串口，含 BREAK）、`usb hid`（报告级）、
+  `usb winusb`（控制/批量/中断、pipe 控制、echo、list --all、--capture 联动）。
+- 测试：`usb test run|list`，支持离线 pcap 断言与真机动作步骤，输出 JSON / JUnit。
+- `serial` 新增 `break` 端点；顶层命令分组改为「串口 / 网络 / USB」。
+
 ### 0.24.0（独立项目首版）
 
 - 从 OMNI Link 仓库（`python/omni_cli/`）拆分为独立仓库，git 历史随迁。

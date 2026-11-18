@@ -28,10 +28,10 @@
 | **USB WinUSB 请求**（M3c 已实现） | 接口需绑定 WinUSB（MS OS 2.0 描述符或 INF）；WinUSB 不支持等时传输 | `omni usb winusb list` 为空 / `winusb_not_found` |
 | **USB 请求（旧：任意设备）** | 已被 WinUSB/HID/CDC 三条通道替代；任意设备需 UsbDk/自研驱动（见 `usb-raw-access.md`） | — |
 | **USB 抓包**（M1 已实现） | [USBPcap](https://desowin.org/usbpcap/) 1.5.4+（官方安装器，装完重启）；**管理员终端** | `omni usb doctor` 报未安装 / 非管理员，并给出下一步 |
-| **USB 测试**（M4a 已实现：离线 pcap 用例；动作步骤待 M4b） | 无额外组件（只需用例引用的 pcap 文件）；动作类步骤将来需要 WinUSB/USBPcap | `test run` 报 `pcap 不存在` 或用例格式错误 |
+| **USB 测试**（M4a/M4b 已实现） | 离线 pcap 用例无额外组件；真机动作需要对应通道（WinUSB 绑定 / HID 驱动 / CDC 串口） | `test run` 报 `pcap 不存在`、`winusb_not_found` 或用例格式错误 |
 
 USB 请求不需要管理员权限，但 WinUSB 接口是**独占**的：Keil、厂商工具或其他
-进程占用同一设备时，`omni usb open` 会失败并提示占用。
+进程占用同一设备时，`omni usb winusb open` 会失败并提示占用。
 
 USBPcap 由 CLI **自动探测**（卸载注册表 → Program Files → PATH → Wireshark
 extcap），不内置、不静默下载；也可以用 `--usbpcap-path` 显式指定。
@@ -63,11 +63,8 @@ omni usb capture doctor        # 同上，抓包视角
 
 | 能力 | 起始版本 |
 | --- | --- |
-| `omni usb` 命令组（命令面） | CLI 0.28.0 / bus 0.2.0 |
-| USB 抓包（M1，已实现） | CLI 0.28.x / bus 0.2.x |
-| 描述符（M2，已实现） | CLI 0.29.x |
-| 请求（M3a CDC / M3b HID，已实现） | CLI 0.30.x |
-| 请求（M3c WinUSB，已实现） | CLI 0.31.x |
-| 测试（M4a 离线用例，已实现） | CLI 0.32.x |
+| `omni usb` 命令组（抓包/描述符/请求/测试） | CLI 0.28.0 / bus 0.2.0 |
+| USB 抓包、描述符、CDC/HID/WinUSB 请求、离线+真机用例 | CLI 0.28.0 / bus 0.2.0 |
+| `usb capture replay` | 未实现（长期项） |
 
 > 里程碑与验收标准见 `omni-backend/docs/usb-plan.md`。

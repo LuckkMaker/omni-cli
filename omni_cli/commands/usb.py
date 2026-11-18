@@ -1,14 +1,11 @@
 """USB 命令组（bus 服务）：描述符 / 请求 / 抓包 / 测试。
 
-里程碑（见 ``omni-backend/docs/usb-plan.md``）：
+- 描述符：desc parse|validate|build|emit|template|from-capture
+- 请求：cdc（复用串口）/ hid（系统 HID 驱动）/ winusb（控制/批量/中断 + echo）
+- 抓包：doctor、capture start|stop|status|transfers|detail|devices|open|save
+- 测试：test run（离线 pcap 断言 + 真机动作）/ test list
 
-- M1 **已完成**：抓包接线（doctor / capture start|stop|status|transfers|detail|
-  devices|open|save）
-- M2 描述符（desc）
-- M3 请求（list / info / open / control / read / write / pipe / echo / replay）
-- M4 测试（test）
-
-未实现的叶子统一返回「尚未实现（计划 Mn）」，命令面在 M0 已固定，后续只换处理器。
+``capture replay`` 仍是长期项（未实现）。
 """
 
 from __future__ import annotations
@@ -28,21 +25,9 @@ from ..runtime import finish, run_command
 from ._stream import hexdump, run_cursor_stream
 from .serial import _parse_hex
 
-#: 各能力对应的里程碑，用于未实现提示
+#: 尚未实现的能力 → 里程碑（当前只剩 replay）
 _MILESTONES = {
-    "desc": "M2",
-    "list": "M3",
-    "info": "M3",
-    "open": "M3",
-    "close": "M3",
-    "status": "M3",
-    "control": "M3",
-    "read": "M3",
-    "write": "M3",
-    "pipe": "M3",
-    "echo": "M3",
-    "replay": "M3",
-    "test": "M4",
+    "replay": "长期项",
 }
 
 #: 失败码 → 可执行的下一步
@@ -74,10 +59,11 @@ def _todo(feature: str):
     """未实现处理器：不连接后端，直接给出计划与下一步。"""
 
     milestone = _MILESTONES.get(feature, "后续")
+    planned = "" if milestone in ("长期项", "后续") else f"（计划 {milestone}）"
 
     def _handler(_args):
         return ctx_error(
-            f"omni usb {feature} 尚未实现（计划 {milestone}）。"
+            f"omni usb {feature} 尚未实现{planned}。"
             "里程碑与验收见 omni-backend/docs/usb-plan.md。"
         )
 
