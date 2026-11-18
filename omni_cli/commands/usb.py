@@ -1230,6 +1230,29 @@ def _format_device(device: dict) -> list[str]:
 
 
 def _winusb_list(c: ApiClient, args):
+    if args.all:
+        data = c.get("/api/usb/winusb/all-devices")
+        if not data.get("success", True):
+            return _failure(data, "USB 设备枚举失败")
+        devices = data.get("devices") or []
+        if args.json_:
+            finish(args, data, "")
+            return 0
+        if not devices:
+            finish(args, data, "总线上没有 USB 设备。")
+            return 0
+        rows = [
+            [
+                f"{item.get('vid') or '-'}:{item.get('pid') or '-'}",
+                item.get("description") or "-",
+                item.get("service") or "-",
+                item.get("instanceId") or "-",
+            ]
+            for item in devices
+        ]
+        print_table(["VID:PID", "描述", "驱动服务", "实例 ID"], rows)
+        return 0
+
     data = _winusb_devices(c, args.guid)
     if not data.get("success", True):
         return _failure(data, "WinUSB 枚举失败")
@@ -1334,6 +1357,59 @@ def _winusb_status(c: ApiClient, args):
     return 0
 
 
+def _capture_hub(c: ApiClient, wanted: str | None) -> tuple[str | None, str]:
+    env = c.get("/api/usb/environment")
+    if not env.get("supported"):
+        return None, "抓包仅支持 Windows。"
+    if not env.get("installed"):
+        return None, "未安装 USBPcap：安装后重启，或用 --usbpcap-path 指定。"
+    devices = env.get("devices") or []
+    if wanted:
+        return wanted, ""
+    if len(devices) == 1:
+        return devices[0].get("id"), ""
+    if not devices:
+        return None, "未枚举到 USBPcap root hub（确认已安装并重启）。"
+    listing = "\n".join(f"  {item.get('id')}  {item.get('label')}" for item in devices)
+    return None, f"检测到多个 root hub，请用 --capture-device 指定：\n{listing}"
+
+
+def _capture_begin(c: ApiClient, args) -> tuple[int | None, int]:
+    hub, problem = _capture_hub(c, args.capture_device)
+    if hub is None:
+        return None, ctx_error(problem + "\n  抓包需要管理员终端（与 `omni usb capture start` 一致）。")
+    started = c.post("/api/usb/capture/start", {"device_id": hub})
+    if not started.get("success", True):
+        return None, _failure(started, "启动抓包失败（--capture）")
+    # 抓包启动后再取游标：只统计本次请求产生的传输
+    cursor = int(c.get("/api/usb/transfers?limit=1").get("nextId") or 0)
+    return cursor, 0
+
+
+def _capture_end(c: ApiClient, cursor: int) -> list[dict]:
+    c.post("/api/usb/capture/stop")
+    time.sleep(0.2)
+    page = c.get(f"/api/usb/transfers?after_id={cursor}&limit=2000")
+    return page.get("items") or []
+
+
+def _capture_summary(rows: list[dict], endpoints: set[int]) -> str:
+    matched = [
+        row
+        for row in rows
+        if int(row.get("endpoint", -1)) in endpoints
+        and row.get("typeLabel") in ("control", "bulk", "interrupt")
+    ]
+    if not matched:
+        return "抓包: 没有匹配的传输（确认 hub 选对、抓包在请求前已启动）。"
+    sample = "；".join(
+        f"#{row.get('id')} {row.get('typeLabel')} "
+        f"{str(row.get('direction', '')).upper()} {row.get('length')}B"
+        for row in matched[:3]
+    )
+    return f"抓包: 匹配 {len(matched)} 条（如 {sample}）"
+
+
 def _winusb_control(c: ApiClient, args):
     try:
         request_type = _request_type(args)
@@ -1348,25 +1424,40 @@ def _winusb_control(c: ApiClient, args):
         return ctx_error(problem)
     if request_type & 0x80 == 0 and length and len(payload or b"") != length:
         return ctx_error("OUT 传输的 --length 必须与数据长度一致（或省略 --length）")
-    data = c.post(
-        "/api/usb/winusb/control",
-        {
-            "id": args.id,
-            "request_type": request_type,
-            "request": request,
-            "value": value,
-            "index": index,
-            "length": length or len(payload or b""),
-            "hex": (payload or b"").hex().upper(),
-        },
-    )
+
+    cursor = None
+    if args.capture:
+        cursor, code = _capture_begin(c, args)
+        if cursor is None:
+            return code
+    try:
+        data = c.post(
+            "/api/usb/winusb/control",
+            {
+                "id": args.id,
+                "request_type": request_type,
+                "request": request,
+                "value": value,
+                "index": index,
+                "length": length or len(payload or b""),
+                "hex": (payload or b"").hex().upper(),
+            },
+        )
+    finally:
+        rows = _capture_end(c, cursor) if cursor is not None else []
+
     if not data.get("success", True):
         return _failure(data, "控制传输失败")
     raw = bytes.fromhex((data.get("dataHex") or "").replace(" ", ""))
+    text = hexdump(raw) if raw else "（无数据段）"
+    if cursor is not None:
+        text += "\n" + _capture_summary(rows, {0x00, 0x80})
     if args.json_:
+        if cursor is not None:
+            data["capture"] = {"transfers": rows}
         finish(args, data, "")
     else:
-        finish(args, data, hexdump(raw) if raw else "（无数据段）")
+        finish(args, data, text)
     return 0
 
 
@@ -1468,31 +1559,46 @@ def _winusb_echo(c: ApiClient, args):
         in_pipe = _as_number(args.in_pipe, "--in-pipe")
     except ValueError as exc:
         return ctx_error(str(exc))
-    data = c.post(
-        "/api/usb/winusb/echo",
-        {
-            "id": args.id,
-            "out_pipe": out_pipe,
-            "in_pipe": in_pipe,
-            "size": args.size,
-            "count": args.count,
-            "pipeline": args.pipeline,
-            "pattern": args.pattern,
-            "seed": args.seed or 0,
-        },
-    )
+    cursor = None
+    if args.capture:
+        cursor, code = _capture_begin(c, args)
+        if cursor is None:
+            return code
+    try:
+        data = c.post(
+            "/api/usb/winusb/echo",
+            {
+                "id": args.id,
+                "out_pipe": out_pipe,
+                "in_pipe": in_pipe,
+                "size": args.size,
+                "count": args.count,
+                "pipeline": args.pipeline,
+                "pattern": args.pattern,
+                "seed": args.seed or 0,
+            },
+        )
+    finally:
+        rows = _capture_end(c, cursor) if cursor is not None else []
+
     if not data.get("success", True):
         return _failure(data, "回环测试失败")
+    capture_line = (
+        "\n" + _capture_summary(rows, {out_pipe, in_pipe}) if cursor is not None else ""
+    )
     if args.json_:
+        if cursor is not None:
+            data["capture"] = {"transfers": rows}
         finish(args, data, "")
-        return 0
+        return 0 if not data.get("mismatches") else 1
     finish(
         args,
         data,
         f"echo 0x{out_pipe:02X} -> 0x{in_pipe:02X}: {data.get('iterations')} 次 × "
         f"{data.get('size')} 字节（pipeline {data.get('pipeline')}）\n"
         f"吞吐 {data.get('throughputKiBs')} KiB/s，不一致 {data.get('mismatches')} 次"
-        + (f"\n首个错误: {data['firstError']}" if data.get("firstError") else ""),
+        + (f"\n首个错误: {data['firstError']}" if data.get("firstError") else "")
+        + capture_line,
     )
     return 0 if not data.get("mismatches") else 1
 
@@ -1630,8 +1736,9 @@ def add_parser(sub):
     w = ps.add_parser("winusb", help="WinUSB 控制/批量/中断传输（设备需绑定 WinUSB）")
     ws = w.add_subparsers(dest="usb_winusb_sub", metavar="<sub>")
 
-    s = ws.add_parser("list", parents=[common_parser()], help="枚举 WinUSB 接口")
+    s = ws.add_parser("list", parents=[common_parser()], help="枚举 WinUSB 接口；--all 列全部 USB 设备")
     s.add_argument("--guid", action="append", metavar="GUID", help="设备接口 GUID（可重复）")
+    s.add_argument("--all", action="store_true", help="列出所有 USB 设备及驱动服务名（分诊用）")
     s.set_defaults(func=run_command(_winusb_list))
 
     s = ws.add_parser("info", parents=[common_parser()], help="设备/接口/端点详情")
@@ -1670,6 +1777,8 @@ def add_parser(sub):
     s.add_argument("--length", default="0")
     s.add_argument("--data", help="OUT 数据（十六进制）")
     s.add_argument("--file", help="OUT 数据文件")
+    s.add_argument("--capture", action="store_true", help="同时用 USBPcap 抓包并核对传输")
+    s.add_argument("--capture-device", help="抓包 root hub（多个时必填）")
     s.set_defaults(func=run_command(_winusb_control))
 
     s = ws.add_parser("read", parents=[common_parser()], help="IN 传输（批量/中断）")
@@ -1706,6 +1815,8 @@ def add_parser(sub):
     s.add_argument("--pipeline", type=int, default=1, help="连续写 N 次再读回")
     s.add_argument("--pattern", choices=("increment", "random", "zeros", "aa", "ff"), default="increment")
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--capture", action="store_true", help="同时用 USBPcap 抓包并核对传输")
+    s.add_argument("--capture-device", help="抓包 root hub（多个时必填）")
     s.set_defaults(func=run_command(_winusb_echo))
 
     # ── USB HID（系统 HID 驱动，报告级） ─────────────────

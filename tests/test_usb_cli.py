@@ -128,6 +128,9 @@ def ns(**kw) -> argparse.Namespace:
         abort=False,
         flush=False,
         reset=False,
+        capture=False,
+        capture_device=None,
+        all=False,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -676,6 +679,96 @@ def main() -> int:
         ns(out_pipe="0x01", in_pipe="0x81"),
     )
     check("winusb echo 不一致退出 1", code == 1, str(code))
+
+    # --all：全部 USB 设备 + 驱动服务
+    code, out, _ = capture(
+        usb_cmd._winusb_list,
+        StubClient(
+            {
+                "/api/usb/winusb/all-devices": {
+                    "success": True,
+                    "devices": [
+                        {
+                            "instanceId": r"USB\VID_C251&PID_0002\3168",
+                            "description": "OMNI USB Device",
+                            "service": "WINUSB",
+                            "vid": "0xC251",
+                            "pid": "0x0002",
+                            "serial": "3168",
+                        }
+                    ],
+                }
+            }
+        ),
+        ns(all=True),
+    )
+    check(
+        "winusb list --all 显示驱动服务",
+        code == 0 and "WINUSB" in out and "OMNI USB Device" in out,
+        out,
+    )
+
+    # --capture：请求期间抓包并核对传输
+    transfer_calls = {"count": 0}
+
+    def transfers_for_capture(path: str):
+        transfer_calls["count"] += 1
+        if "limit=1" in path:
+            return {"items": [], "nextId": 5}
+        return {
+            "items": [
+                {"id": 6, "endpoint": 0x01, "typeLabel": "bulk", "direction": "out", "length": 64},
+                {"id": 7, "endpoint": 0x81, "typeLabel": "bulk", "direction": "in", "length": 64},
+            ],
+            "nextId": 8,
+        }
+
+    client = StubClient(
+        {
+            "/api/usb/environment": ENV_OK,
+            "/api/usb/transfers": transfers_for_capture,
+            "/api/usb/capture/start": {"success": True, "capturePath": "C:/tmp/x.pcap"},
+            "/api/usb/capture/stop": {"success": True},
+            "/api/usb/winusb/echo": echo_ok,
+        }
+    )
+    code, out, _ = capture(
+        usb_cmd._winusb_echo,
+        client,
+        ns(out_pipe="0x01", in_pipe="0x81", capture=True),
+    )
+    check(
+        "winusb echo --capture 核对到传输",
+        code == 0 and "抓包: 匹配 2 条" in out,
+        out,
+    )
+    check(
+        "winusb echo --capture 启停抓包",
+        [call[1] for call in client.calls if call[0] == "POST"]
+        == ["/api/usb/capture/start", "/api/usb/winusb/echo", "/api/usb/capture/stop"],
+        str(client.calls),
+    )
+
+    client = StubClient(
+        {
+            "/api/usb/environment": ENV_OK,
+            "/api/usb/capture/start": {
+                "success": False,
+                "code": "not_elevated",
+                "error": "USB 抓包需要管理员权限",
+            },
+        }
+    )
+    code, _, err = capture(
+        usb_cmd._winusb_echo,
+        client,
+        ns(out_pipe="0x01", in_pipe="0x81", capture=True),
+    )
+    check(
+        "winusb echo --capture 非管理员失败",
+        code == 1 and "管理员" in err,
+        err,
+    )
 
     # ── 3. doctor（M1） ──────────────────────────────────
     code, out, _ = capture(
