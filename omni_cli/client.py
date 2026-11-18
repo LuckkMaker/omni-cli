@@ -219,10 +219,19 @@ def _backend_command(service_name: str = settings.DEFAULT_SERVICE) -> list[str]:
     """
     svc = settings.service(service_name)
 
-    # 显式覆盖：OMNI_BACKEND_EXE（link）/ OMNI_BUS_BACKEND_EXE（bus）
+    # 显式覆盖：OMNI_BACKEND_EXE（link）/ OMNI_BUS_BACKEND_EXE（bus）。
+    # 路径不存在时直接报错而不是静默回退：否则会用当前解释器去跑源码 server.py，
+    # 解释器缺后端依赖时会以难以定位的 500（如 ModuleNotFoundError: prettytable）失败。
     exe_var = "OMNI_BACKEND_EXE" if svc.name == settings.SERVICE_LINK else f"OMNI_{svc.name.upper()}_BACKEND_EXE"
     explicit = os.environ.get(exe_var)
-    if explicit and os.path.exists(explicit):
+    if explicit:
+        if not os.path.exists(explicit):
+            raise ApiError(
+                0,
+                f"{exe_var} 指向的后端可执行文件不存在: {explicit}\n"
+                "  请修正该环境变量，或取消它改用后端源码/已安装 GUI 的产物。",
+                kind="error",
+            )
         return [explicit, "--port", "0"]
 
     server_py = settings.backend_server_py(svc.name)
