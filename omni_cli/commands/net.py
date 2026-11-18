@@ -63,6 +63,17 @@ def add_parser(sub):
     t.add_argument("state", choices=("on", "off"), help="on 开启 / off 关闭")
     t.set_defaults(func=run_command(_ts_echo))
 
+    t = ss.add_parser("auto-send", help="定时循环发送（后端持有定时器，关掉终端仍继续）")
+    a = t.add_subparsers(dest="net_ts_auto_sub", metavar="<sub>")
+    x = a.add_parser("start", parents=[common_parser()], help="启动定时发送")
+    x.add_argument("--hex", required=True, metavar="HEX", help="定时发送的十六进制载荷")
+    x.add_argument("--interval", type=int, default=1000, metavar="MS", help="发送间隔毫秒（默认 1000）")
+    x.add_argument("--target", action="append", metavar="ID",
+                   help="目标客户端 id（可重复；缺省广播）")
+    x.set_defaults(func=run_command(_ts_auto_start))
+    x = a.add_parser("stop", parents=[common_parser()], help="停止定时发送（返回发送/失败计数）")
+    x.set_defaults(func=run_command(_ts_auto_stop))
+
     # ── TCP Client ──
     s = ps.add_parser("tcp-client", help="TCP 客户端（连接远端服务器）")
     ss = s.add_subparsers(dest="net_tcp_client_sub", metavar="<sub>")
@@ -84,6 +95,15 @@ def add_parser(sub):
     t.add_argument("--file", metavar="PATH", help="发送文件原始字节")
     t.add_argument("--no-newline", action="store_true", help="--text 不追加换行")
     t.set_defaults(func=run_command(_tc_send))
+
+    t = ss.add_parser("auto-send", help="定时循环发送（后端持有定时器，关掉终端仍继续）")
+    a = t.add_subparsers(dest="net_tc_auto_sub", metavar="<sub>")
+    x = a.add_parser("start", parents=[common_parser()], help="启动定时发送")
+    x.add_argument("--hex", required=True, metavar="HEX", help="定时发送的十六进制载荷")
+    x.add_argument("--interval", type=int, default=1000, metavar="MS", help="发送间隔毫秒（默认 1000）")
+    x.set_defaults(func=run_command(_tc_auto_start))
+    x = a.add_parser("stop", parents=[common_parser()], help="停止定时发送（返回发送/失败计数）")
+    x.set_defaults(func=run_command(_tc_auto_stop))
 
     # ── UDP ──
     s = ps.add_parser("udp", help="UDP 收发（绑定本地端口 / 发送数据报）")
@@ -112,6 +132,58 @@ def add_parser(sub):
     t = ss.add_parser("echo", parents=[common_parser()], help="开/关回声（收到即回给来源）")
     t.add_argument("state", choices=("on", "off"), help="on 开启 / off 关闭")
     t.set_defaults(func=run_command(_udp_echo))
+
+    t = ss.add_parser("auto-send", help="定时循环发送（后端持有定时器，关掉终端仍继续）")
+    a = t.add_subparsers(dest="net_udp_auto_sub", metavar="<sub>")
+    x = a.add_parser("start", parents=[common_parser()], help="启动定时发送")
+    x.add_argument("--hex", required=True, metavar="HEX", help="定时发送的十六进制载荷")
+    x.add_argument("--interval", type=int, default=1000, metavar="MS", help="发送间隔毫秒（默认 1000）")
+    x.add_argument("--to", required=True, metavar="HOST", help="目标地址（支持广播）")
+    x.add_argument("--port", type=int, required=True, help="目标端口")
+    x.set_defaults(func=run_command(_udp_auto_start))
+    x = a.add_parser("stop", parents=[common_parser()], help="停止定时发送（返回发送/失败计数）")
+    x.set_defaults(func=run_command(_udp_auto_stop))
+
+    # ── TFTP（后端已有实现：板子固件/配置文件的传输通道） ──
+    s = ps.add_parser("tftp", help="TFTP 服务器/客户端（给设备传文件、从设备取文件）")
+    ss = s.add_subparsers(dest="net_tftp_sub", metavar="<sub>")
+
+    t = ss.add_parser("server-start", parents=[common_parser()],
+                      help="启动 TFTP 服务器（设备从这里下载/上传文件）")
+    t.add_argument("--root", required=True, metavar="DIR", help="根目录（可读写的文件夹）")
+    t.add_argument("--host", default="0.0.0.0", help="监听地址（默认 0.0.0.0）")
+    t.add_argument("--port", type=int, default=69, help="监听端口（默认 69）")
+    t.set_defaults(func=run_command(_tftp_server_start))
+
+    t = ss.add_parser("server-stop", parents=[common_parser()], help="停止 TFTP 服务器")
+    t.set_defaults(func=run_command(_tftp_server_stop))
+
+    t = ss.add_parser("server-status", parents=[common_parser()],
+                      help="TFTP 服务器状态与进行中的传输")
+    t.set_defaults(func=run_command(_tftp_server_status))
+
+    t = ss.add_parser("server-files", parents=[common_parser()], help="列出 TFTP 根目录下的文件")
+    t.set_defaults(func=run_command(_tftp_server_files))
+
+    t = ss.add_parser("get", parents=[common_parser()],
+                      help="从远端 TFTP 服务器下载文件（设备侧作为服务器时用）")
+    t.add_argument("--host", required=True, help="TFTP 服务器地址")
+    t.add_argument("--port", type=int, default=69, help="服务器端口（默认 69）")
+    t.add_argument("--remote", required=True, metavar="NAME", help="远端文件名")
+    t.add_argument("--local", required=True, metavar="PATH", help="本地保存路径")
+    t.add_argument("--max-wait", type=int, default=300, metavar="SEC",
+                   help="等待传输完成的超时秒数（默认 300）")
+    t.set_defaults(func=run_command(_tftp_get))
+
+    t = ss.add_parser("put", parents=[common_parser()],
+                      help="上传文件到远端 TFTP 服务器")
+    t.add_argument("--host", required=True, help="TFTP 服务器地址")
+    t.add_argument("--port", type=int, default=69, help="服务器端口（默认 69）")
+    t.add_argument("--local", required=True, metavar="PATH", help="本地文件路径")
+    t.add_argument("--remote", required=True, metavar="NAME", help="远端文件名")
+    t.add_argument("--max-wait", type=int, default=300, metavar="SEC",
+                   help="等待传输完成的超时秒数（默认 300）")
+    t.set_defaults(func=run_command(_tftp_put))
 
     # ── 接收缓冲读取（三种角色共用） ──
     s = ps.add_parser(
@@ -353,6 +425,166 @@ def _udp_echo(c: ApiClient, args):
     finish(args, {"echo": args.state == "on"},
            f"UDP 回声已{'开启' if args.state == 'on' else '关闭'}")
     return 0
+
+
+# ── 处理器：TFTP ───────────────────────────────────────────
+
+def _tftp_server_start(c: ApiClient, args):
+    data = c.post("/api/network/tftp/server/start",
+                  {"root": args.root, "host": args.host, "port": args.port})
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "启动失败")
+    finish(args, {"started": True, "root": args.root, "host": args.host, "port": args.port},
+           f"TFTP 服务器已启动  {args.host}:{args.port}  根目录 {args.root}")
+    return 0
+
+
+def _tftp_server_stop(c: ApiClient, args):
+    data = c.post("/api/network/tftp/server/stop")
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "停止失败")
+    finish(args, {"stopped": True}, "TFTP 服务器已停止")
+    return 0
+
+
+def _tftp_server_status(c: ApiClient, args):
+    data = c.get("/api/network/tftp/server/status")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if args.quiet:
+        return 0
+    if not data.get("running"):
+        print("TFTP 服务器未运行。可用 `omni net tftp server-start --root <dir>` 启动。")
+        return 1
+    print(f"运行中  {data.get('host')}:{data.get('port')}  根目录 {data.get('root')}"
+          f"  进行中传输 {data.get('activeTransfers', 0)}")
+    return 0
+
+
+def _tftp_server_files(c: ApiClient, args):
+    data = c.get("/api/network/tftp/server/files")
+    files = data.get("files") or []
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if args.quiet:
+        return 0
+    if not files:
+        print("根目录为空。")
+        return 0
+    rows = []
+    for f in files:
+        if isinstance(f, dict):
+            rows.append([f.get("name") or "-", f.get("size") if f.get("size") is not None else "-"])
+        else:
+            rows.append([str(f), "-"])
+    print_table(["文件", "大小(字节)"], rows)
+    return 0
+
+
+def _tftp_transfer(c: ApiClient, args, direction: str):
+    """发起 TFTP 传输并等待完成。
+
+    后端把传输做成后台任务（POST 立即返回），因此必须轮询
+    ``/api/network/tftp/client/status`` 直到 ``busy`` 变 False，
+    才能拿到真实结果（transferred / status / error）。
+    """
+    path = f"/api/network/tftp/client/{direction}"
+    data = c.post(path, {"host": args.host, "port": args.port,
+                         "remote": args.remote, "local": args.local})
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "传输失败")
+
+    deadline = time.time() + max(5.0, float(args.max_wait))
+    active: dict = {}
+    while time.time() < deadline:
+        status = c.get("/api/network/tftp/client/status")
+        if not status.get("busy"):
+            active = status.get("active") or {}
+            break
+        time.sleep(0.1)
+    else:
+        # 超时：不静默成功，提示可用 cancel 清理
+        return ctx_error(f"传输未在 {args.max_wait} 秒内完成"
+                         "（可执行 `omni net tftp` 相关命令前先 cancel，或加大 --timeout）")
+
+    state = (active or {}).get("status")
+    if state == "error":
+        return ctx_error((active or {}).get("error") or "传输失败")
+    if state == "cancelled":
+        return ctx_error("传输已取消")
+
+    transferred = (active or {}).get("transferred")
+    total = (active or {}).get("total")
+    if direction == "download":
+        human = f"已下载 {args.remote} → {args.local}"
+    else:
+        human = f"已上传 {args.local} → {args.remote}"
+    if transferred is not None:
+        human += f"（{transferred} 字节"
+        human += f" / 共 {total} 字节）" if total else "）"
+    finish(args, {"ok": True, "direction": direction, **(active or {})}, human)
+    return 0
+
+
+def _tftp_get(c: ApiClient, args):
+    return _tftp_transfer(c, args, "download")
+
+
+def _tftp_put(c: ApiClient, args):
+    return _tftp_transfer(c, args, "upload")
+
+
+# ── 处理器：定时发送 ───────────────────────────────────────
+
+def _auto_start(c: ApiClient, args, path: str, extra: dict):
+    cleaned = args.hex.replace(" ", "").replace("0x", "").replace("0X", "")
+    if not cleaned or len(cleaned) % 2:
+        return ctx_error("无效的十六进制载荷：需要偶数长度的十六进制串")
+    payload = {"data": cleaned.upper(), "interval_ms": args.interval, **extra}
+    data = c.post(path, payload)
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "启动定时发送失败")
+    finish(args, {"started": True, "interval_ms": args.interval, **extra},
+           f"定时发送已启动（间隔 {args.interval} ms，载荷 {len(cleaned) // 2} 字节）"
+           "——后端持有定时器，关掉终端仍继续")
+    return 0
+
+
+def _auto_stop(c: ApiClient, args, path: str):
+    data = c.post(path)
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "停止定时发送失败")
+    finish(args, data, f"定时发送已停止（发送 {data.get('sent', '?')} 次，"
+                       f"失败 {data.get('errors', '?')} 次）")
+    return 0
+
+
+def _ts_auto_start(c: ApiClient, args):
+    return _auto_start(c, args, "/api/network/tcp-server/auto-send/start",
+                       {"targets": args.target})
+
+
+def _ts_auto_stop(c: ApiClient, args):
+    return _auto_stop(c, args, "/api/network/tcp-server/auto-send/stop")
+
+
+def _tc_auto_start(c: ApiClient, args):
+    return _auto_start(c, args, "/api/network/tcp-client/auto-send/start", {})
+
+
+def _tc_auto_stop(c: ApiClient, args):
+    return _auto_stop(c, args, "/api/network/tcp-client/auto-send/stop")
+
+
+def _udp_auto_start(c: ApiClient, args):
+    return _auto_start(c, args, "/api/network/udp/auto-send/start",
+                       {"targets": [f"{args.to}:{args.port}"]})
+
+
+def _udp_auto_stop(c: ApiClient, args):
+    return _auto_stop(c, args, "/api/network/udp/auto-send/stop")
 
 
 # ── 处理器：接收缓冲读取 ────────────────────────────────────

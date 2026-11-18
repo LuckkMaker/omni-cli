@@ -467,6 +467,8 @@ omni backend stop bus
 | `status` | 串口开合状态 + 接收缓冲统计（oldest_seq / next_seq / dropped） |
 | `close` | 关闭串口；接收缓存保留，仍可 `read` 回看 |
 | `update` | 在线更新参数（`--baud / --rts / --no-rts / --dtr / --no-dtr`），无需关闭重开 |
+| `record start/stop/status` | **后端侧录制**：`--out PATH` 落盘。与 `read --out` 的区别是录在后端——关掉终端仍继续，且不受客户端卡顿影响 |
+| `auto-send start/stop/update` | 定时循环发送（`--hex` + `--interval MS`），后端持有定时器，`stop` 返回发送/失败计数 |
 
 ```powershell
 omni serial ports
@@ -494,6 +496,9 @@ CLI 收不到数据时先确认：对端已在发送、波特率/校验位匹配
 | `udp start/stop/status/send/echo` | 绑定本地端口收发、向目标地址发数据报、开-关回声 |
 | `read` | 读取接收缓冲：`--kind tcp-server\|tcp-client\|udp`、`--peer host:port` 过滤、`--since` 游标、`--wait MS` 同步等读、`--follow`、`--hex`、`--out`、`--json` |
 | `ping` | ICMP ping：`-n` 次数、`-i` 间隔、`-W` 超时、`-s` 包长；`--last` 查最近一次汇总（时延 min/avg/max、丢包率） |
+| `tftp server-start/server-stop/server-status/server-files` | TFTP 服务器：给设备提供文件下载/上传（板子固件、配置文件） |
+| `tftp get/put` | TFTP 客户端：从设备侧服务器取文件 / 传文件过去；`--max-wait` 控制等待上限，完成后报真实字节数 |
+| `tcp-server\|tcp-client\|udp auto-send start/stop` | 定时循环发送（后端定时器，`stop` 返回发送/失败计数） |
 
 ```powershell
 omni net interfaces
@@ -502,6 +507,16 @@ omni net tcp-client connect --host 192.168.1.100 --port 6000
 omni net tcp-client send --text "hello" && omni net read --kind tcp-client --wait 500 --hex
 omni net read --kind tcp-server --peer 192.168.1.101:52036 --follow
 omni net udp start --port 5000 && omni net read --kind udp --wait 500
+
+# 给设备传文件（板子作 TFTP 服务器）
+omni net tftp get --host 192.168.1.100 --remote fw.bin --local D:\\tmp\\fw.bin
+# 板子从本机取文件（本机作 TFTP 服务器）
+omni net tftp server-start --root D:\\share
+omni net tftp server-files
+
+# 定时循环发送（后端持有定时器，关掉终端仍继续）
+omni net tcp-client auto-send start --hex A1B2 --interval 100
+omni net tcp-client auto-send stop        # 返回发送/失败计数
 ```
 
 **游标记忆**：`read` 默认续读上次位置（记录在 `<服务状态目录>/.read_cursor.json`），

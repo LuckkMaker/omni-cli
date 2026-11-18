@@ -82,6 +82,42 @@ def add_parser(sub):
                    help="以十六进制转储显示（偏移 + 十六进制 + ASCII）")
     s.set_defaults(func=run_command(_read))
 
+    s = ps.add_parser("record", help="后端侧录制（关掉终端仍继续，字节完整落盘）")
+    rs = s.add_subparsers(dest="serial_record_sub", metavar="<sub>")
+
+    t = rs.add_parser("start", parents=[common_parser()], help="开始录制接收数据到文件")
+    t.add_argument("--out", required=True, metavar="PATH", help="录制文件路径（.dat，追加写入）")
+    t.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
+    t.set_defaults(func=run_command(_record_start))
+
+    t = rs.add_parser("stop", parents=[common_parser()], help="停止录制（返回录制字节数）")
+    t.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
+    t.set_defaults(func=run_command(_record_stop))
+
+    t = rs.add_parser("status", parents=[common_parser()], help="查询录制状态")
+    t.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
+    t.set_defaults(func=run_command(_record_status))
+
+    s = ps.add_parser("auto-send", help="定时循环发送（后端持有定时器，关掉终端仍继续）")
+    a = s.add_subparsers(dest="serial_auto_sub", metavar="<sub>")
+
+    t = a.add_parser("start", parents=[common_parser()], help="启动定时发送")
+    t.add_argument("--hex", required=True, metavar="HEX", help="定时发送的十六进制载荷")
+    t.add_argument("--interval", type=int, default=1000, metavar="MS",
+                   help="发送间隔毫秒（默认 1000）")
+    t.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
+    t.set_defaults(func=run_command(_auto_send_start))
+
+    t = a.add_parser("stop", parents=[common_parser()], help="停止定时发送（返回发送/失败计数）")
+    t.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
+    t.set_defaults(func=run_command(_auto_send_stop))
+
+    t = a.add_parser("update", parents=[common_parser()], help="在线调整载荷/间隔")
+    t.add_argument("--hex", metavar="HEX", help="新的十六进制载荷（可选）")
+    t.add_argument("--interval", type=int, metavar="MS", help="新的间隔毫秒（可选）")
+    t.add_argument("--id", default="cli", metavar="ID", help="连接实例 ID（默认 cli）")
+    t.set_defaults(func=run_command(_auto_send_update))
+
     s = ps.add_parser("update", parents=[common_parser()],
                       help="在线更新串口参数（无需关闭重开）")
     s.add_argument("--baud", type=int, help="波特率")
@@ -226,6 +262,83 @@ def _read(c: ApiClient, args):
         cursor_key=f"serial:{args.id}",
         service_name="bus",
     )
+
+
+def _record_start(c: ApiClient, args):
+    data = c.post("/api/serial/record/start",
+                  {"connection_id": args.id, "path": args.out})
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "开始录制失败")
+    finish(args, {"recording": True, "path": args.out, "id": args.id},
+           f"开始录制到 {args.out}（后端落盘，关掉终端仍继续）")
+    return 0
+
+
+def _record_stop(c: ApiClient, args):
+    data = c.post("/api/serial/record/stop", {"connection_id": args.id})
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "停止录制失败")
+    written = data.get("bytes_written", data.get("bytes"))
+    finish(args, data, f"录制已停止（本次 {written if written is not None else '?'} 字节）")
+    return 0
+
+
+def _record_status(c: ApiClient, args):
+    data = c.get(f"/api/serial/status?connection_id={args.id}")
+    if args.json_:
+        finish(args, data, "")
+        return 0
+    if args.quiet:
+        return 0
+    rec = data.get("recording") or {}
+    if not rec.get("active") and not rec.get("path"):
+        print(f"未在录制（实例 {args.id}）。可用 `omni serial record start --out <path>`。")
+        return 1
+    print(f"录制中  {rec.get('path')}  已写 {rec.get('bytes', 0)} 字节（实例 {args.id}）")
+    return 0
+
+
+def _auto_send_start(c: ApiClient, args):
+    cleaned = args.hex.replace(" ", "").replace("0x", "").replace("0X", "")
+    if not cleaned or len(cleaned) % 2:
+        return ctx_error("无效的十六进制载荷：需要偶数长度的十六进制串")
+    data = c.post("/api/serial/auto-send/start",
+                  {"connection_id": args.id, "data": cleaned.upper(),
+                   "interval_ms": args.interval})
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "启动定时发送失败")
+    finish(args, {"started": True, "interval_ms": args.interval, "id": args.id},
+           f"定时发送已启动（间隔 {args.interval} ms，载荷 {len(cleaned) // 2} 字节，"
+           f"实例 {args.id}）——后端持有定时器，关掉终端仍继续")
+    return 0
+
+
+def _auto_send_stop(c: ApiClient, args):
+    data = c.post("/api/serial/auto-send/stop", {"connection_id": args.id})
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "停止定时发送失败")
+    finish(args, data, f"定时发送已停止（发送 {data.get('sent', '?')} 次，"
+                       f"失败 {data.get('errors', '?')} 次）")
+    return 0
+
+
+def _auto_send_update(c: ApiClient, args):
+    payload = {"connection_id": args.id}
+    if args.hex is not None:
+        cleaned = args.hex.replace(" ", "").replace("0x", "").replace("0X", "")
+        if not cleaned or len(cleaned) % 2:
+            return ctx_error("无效的十六进制载荷：需要偶数长度的十六进制串")
+        payload["data"] = cleaned.upper()
+    if args.interval is not None:
+        payload["interval_ms"] = args.interval
+    if len(payload) == 1:
+        return ctx_error("没有要更新的参数：可用 --hex / --interval")
+    data = c.post("/api/serial/auto-send/update", payload)
+    if not data.get("success", True):
+        return ctx_error(data.get("error") or "更新定时发送失败")
+    finish(args, data, f"定时发送已更新（间隔 {data.get('interval_ms', '?')} ms，"
+                       f"载荷 {data.get('bytes', '?')} 字节）")
+    return 0
 
 
 def _update(c: ApiClient, args):

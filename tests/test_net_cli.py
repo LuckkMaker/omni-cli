@@ -54,6 +54,7 @@ def _args(**kwargs):
                 text=None, hex=None, file=None, no_newline=False,
                 target=None, peer=None, kind="tcp-client",
                 host=None, count=4, timeout_ms=1000, size=32, last=False,
+                root=None, remote=None, local=None, max_wait=300,
                 since=0, max_bytes=65536, wait=None, follow=False,
                 interval=0.2, duration=0.0, out=None, encoding=None,
                 hex_=False)
@@ -230,6 +231,105 @@ def test_payload_helper():
     check("无来源报错", data is None and err == 1)
 
 
+def test_tftp():
+    print("[8] tftp 请求组装")
+    from omni_cli.commands import net as N
+
+    c = StubClient()
+    rc, out, _ = _run(N._tftp_server_start, c,
+                      _args(root="D:\\share", host="0.0.0.0", port=69))
+    check("server-start 载荷",
+          c.calls[0] == ("POST", "/api/network/tftp/server/start",
+                         {"root": "D:\\share", "host": "0.0.0.0", "port": 69}),
+          str(c.calls[0]))
+    check("server-start 回显", "TFTP 服务器已启动" in out, out)
+
+    c = StubClient()
+    rc, out, _ = _run(N._tftp_server_stop, c, _args())
+    check("server-stop 走 POST", c.calls[0][0] == "POST" and "tftp/server/stop" in c.calls[0][1])
+
+    c = StubClient(get_result={"running": True, "host": "0.0.0.0", "port": 69,
+                               "root": "D:\\share", "activeTransfers": 1})
+    rc, out, _ = _run(N._tftp_server_status, c, _args())
+    check("server-status 显示根目录与传输数", "D:\\share" in out and "进行中传输 1" in out, out)
+
+    c = StubClient(get_result={"files": [{"name": "fw.bin", "size": 1234}]})
+    rc, out, _ = _run(N._tftp_server_files, c, _args())
+    check("server-files 表格含文件名与大小", "fw.bin" in out and "1234" in out, out)
+
+    c = StubClient(post_result={"success": True},
+                   get_result={"busy": False,
+                               "active": {"status": "done", "transferred": 2048,
+                                          "total": 2048}})
+    rc, out, _ = _run(N._tftp_get, c,
+                      _args(host="192.168.1.100", port=69, remote="fw.bin",
+                            local="D:\\tmp\\fw.bin", max_wait=60))
+    check("get 载荷",
+          c.calls[0] == ("POST", "/api/network/tftp/client/download",
+                         {"host": "192.168.1.100", "port": 69,
+                          "remote": "fw.bin", "local": "D:\\tmp\\fw.bin"}),
+          str(c.calls[0]))
+    check("get 回显方向与字节数", "已下载" in out and "2048" in out, out)
+
+    c = StubClient(post_result={"success": True},
+                   get_result={"busy": False,
+                               "active": {"status": "done", "transferred": 512,
+                                          "total": 512}})
+    rc, out, _ = _run(N._tftp_put, c,
+                      _args(host="192.168.1.100", port=69, remote="cfg.ini",
+                            local="D:\\tmp\\cfg.ini"))
+    check("put 走 upload", "tftp/client/upload" in c.calls[0][1], str(c.calls[0]))
+    check("put 回显方向", "已上传" in out, out)
+
+    c = StubClient(post_result={"success": False, "error": "文件不存在"})
+    rc, out, err = _run(N._tftp_get, c,
+                        _args(host="1.2.3.4", port=69, remote="x", local="y"))
+    check("传输失败退出码 1 并透传错误", rc == 1 and "文件不存在" in err, err)
+
+    c = StubClient(post_result={"success": True},
+                   get_result={"busy": False,
+                               "active": {"status": "error", "error": "超时未收到 DATA"}})
+    rc, out, err = _run(N._tftp_get, c,
+                        _args(host="1.2.3.4", port=69, remote="x", local="y", max_wait=5))
+    check("后台传输报错透传", rc == 1 and "超时未收到 DATA" in err, err)
+
+
+def test_auto_send():
+    print("[9] auto-send 请求组装")
+    from omni_cli.commands import net as N
+
+    c = StubClient()
+    rc, out, _ = _run(N._ts_auto_start, c,
+                      _args(hex="AA BB", interval=200, target=["c1"]))
+    check("tcp-server auto-send 载荷",
+          c.calls[0][2] == {"data": "AABB", "interval_ms": 200, "targets": ["c1"]},
+          str(c.calls[0][2]))
+    check("提示后端持有定时器", "后端持有定时器" in out, out)
+
+    c = StubClient()
+    rc, out, _ = _run(N._tc_auto_start, c, _args(hex="01", interval=500))
+    check("tcp-client auto-send 路径",
+          c.calls[0][1] == "/api/network/tcp-client/auto-send/start", str(c.calls[0]))
+
+    c = StubClient()
+    rc, out, _ = _run(N._udp_auto_start, c,
+                      _args(hex="02", interval=100, to="192.168.1.255", port=5000))
+    check("udp auto-send 目标拼成 host:port",
+          c.calls[0][2]["targets"] == ["192.168.1.255:5000"], str(c.calls[0][2]))
+
+    c = StubClient(post_result={"success": True, "sent": 42, "errors": 1})
+    rc, out, _ = _run(N._ts_auto_stop, c, _args())
+    check("stop 回显发送/失败计数", "发送 42 次" in out and "失败 1 次" in out, out)
+
+    c = StubClient()
+    rc, out, err = _run(N._tc_auto_start, c, _args(hex="0A0", interval=100))
+    check("奇数长度 hex 拒绝", rc == 1 and c.calls == [], err)
+
+    c = StubClient(post_result={"success": False, "error": "TCP Client 未连接"})
+    rc, out, err = _run(N._tc_auto_start, c, _args(hex="01", interval=100))
+    check("后端拒绝时透传错误", rc == 1 and "未连接" in err, err)
+
+
 def test_help_category():
     print("[7] 分类帮助包含 net")
     from omni_cli.cli import COMMAND_CATEGORIES
@@ -250,6 +350,8 @@ def main() -> int:
     test_read_requests()
     test_ping()
     test_payload_helper()
+    test_tftp()
+    test_auto_send()
     test_help_category()
     print()
     if failures:

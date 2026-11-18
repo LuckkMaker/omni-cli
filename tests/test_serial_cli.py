@@ -281,7 +281,8 @@ def _sargs(**kwargs):
     base = dict(backend_port=None, service=None, managed=False, json_=False,
                 quiet=False, timeout=30, command="serial",
                 text=None, hex=None, file=None, no_newline=False,
-                no_rts=False, no_dtr=False, rts=False, dtr=False, baud=None)
+                no_rts=False, no_dtr=False, rts=False, dtr=False, baud=None,
+                out=None, state=None)
     base.update(kwargs)
     return SimpleNamespace(**base)
 
@@ -433,6 +434,66 @@ def _run_quiet_noop_update():
     return rc, out, err
 
 
+def test_record_and_auto_send():
+    print("[12] record / auto-send 请求组装")
+    from omni_cli.commands import serial as S
+
+    c = StubClient()
+    rc, out, _ = _run_serial(S._record_start, c,
+                             _sargs(id="cli", out="D:\\log\\rx.dat"))
+    check("record start 载荷",
+          c.calls[0] == ("POST", "/api/serial/record/start",
+                         {"connection_id": "cli", "path": "D:\\log\\rx.dat"}),
+          str(c.calls[0]))
+    check("提示后端落盘", "关掉终端仍继续" in out, out)
+
+    c = StubClient(post_result={"success": True, "bytes_written": 4096})
+    rc, out, _ = _run_serial(S._record_stop, c, _sargs(id="cli"))
+    check("record stop 回显字节数", "4096" in out, out)
+
+    c = StubClient(get_result={"connected": True, "port": "COM3", "baudrate": 115200,
+                               "bytesize": 8, "parity": "N", "stopbits": 1,
+                               "recording": {"active": True, "path": "D:\\log\\rx.dat",
+                                             "bytes": 1024}})
+    rc, out, _ = _run_serial(S._record_status, c, _sargs(id="cli"))
+    check("record status 显示路径与字节", "rx.dat" in out and "1024" in out, out)
+
+    c = StubClient(get_result={"connected": True, "recording": {"active": False}})
+    rc, out, _ = _run_serial(S._record_status, c, _sargs(id="cli"))
+    check("未录制时退出码 1", rc == 1, str(rc))
+
+    c = StubClient()
+    rc, out, _ = _run_serial(S._auto_send_start, c,
+                             _sargs(id="cli", hex="AA BB", interval=500))
+    check("auto-send start 载荷",
+          c.calls[0] == ("POST", "/api/serial/auto-send/start",
+                         {"connection_id": "cli", "data": "AABB", "interval_ms": 500}),
+          str(c.calls[0]))
+    check("提示后端持有定时器", "后端持有定时器" in out, out)
+
+    c = StubClient(post_result={"success": True, "sent": 20, "errors": 0})
+    rc, out, _ = _run_serial(S._auto_send_stop, c, _sargs(id="cli"))
+    check("auto-send stop 回显计数", "发送 20 次" in out, out)
+
+    c = StubClient(post_result={"success": True, "interval_ms": 200, "bytes": 1})
+    rc, out, _ = _run_serial(S._auto_send_update, c,
+                             _sargs(id="cli", hex="01", interval=200))
+    check("auto-send update 载荷",
+          c.calls[0][2] == {"connection_id": "cli", "data": "01", "interval_ms": 200},
+          str(c.calls[0][2]))
+
+    c = StubClient()
+    rc, out, err = _run_serial(S._auto_send_update, c, _sargs(id="cli", hex=None, interval=None))
+    check("update 无参数拒绝", rc == 1 and "没有要更新" in err, err)
+
+
+def _run_serial(func, c, args):
+    out, err = FakeStdout(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = func(c, args)
+    return rc, out.text, err.getvalue()
+
+
 def test_categorized_help():
     print("[11] 分类帮助覆盖全部命令")
     from omni_cli.cli import COMMAND_CATEGORIES, build_parser, _CategorizedHelpFormatter
@@ -474,6 +535,7 @@ def main() -> int:
     test_serial_ports_and_open()
     test_serial_send()
     test_serial_read_and_update()
+    test_record_and_auto_send()
     test_categorized_help()
     print()
     if failures:
