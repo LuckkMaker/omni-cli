@@ -54,8 +54,6 @@ _HINTS = {
     "invalid_bufferlen": "bufferlen 取值范围 4096..134217728。",
     "invalid_devices": "--devices 用逗号分隔设备地址，如 1,2,3。",
     "unsupported_platform": "USB 抓包仅支持 Windows。",
-    "usbdk_unavailable": "UsbDk 未安装或不可用：安装 UsbDk 后重启，"
-    "或用 `omni usb raw doctor` 查看详情。",
 }
 
 _TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "方向", "类型", "长度", "状态", "摘要"]
@@ -818,60 +816,6 @@ def _test_list(c: ApiClient, args):
     return 0
 
 
-def _raw_doctor(c: ApiClient, args):
-    data = c.get("/api/usb/raw/doctor")
-    if args.json_:
-        finish(args, data, "")
-        return 0
-    service = data.get("service")
-    service_text = "存在" if service is True else ("不存在" if service is False else "未知")
-    lines = [
-        f"平台        : {'Windows' if data.get('supported') else '非 Windows（不支持）'}",
-        f"UsbDkHelper : {data.get('path') or '未找到'}",
-        f"驱动服务    : {service_text}",
-        f"可用        : {'是' if data.get('available') else '否'}",
-        f"设备数      : {len(data.get('devices') or [])}",
-    ]
-    for item in data.get("warnings") or []:
-        lines.append(f"警告        : {item}")
-    if data.get("error"):
-        lines.append(f"错误        : {data['error']}")
-    if not data.get("available"):
-        lines.append("")
-        lines.append(
-            "下一步: 安装 UsbDk（管理员安装后重启），再执行 `omni usb raw doctor`；"
-            "spike 阶段不随安装包分发驱动。"
-        )
-    finish(args, data, "\n".join(lines))
-    return 0
-
-
-def _raw_devices(c: ApiClient, args):
-    data = c.get("/api/usb/raw/devices")
-    if not data.get("success", True):
-        return _failure(data, "UsbDk 设备枚举失败")
-    devices = data.get("devices") or []
-    if args.json_:
-        finish(args, data, "")
-        return 0
-    if not devices:
-        finish(args, data, "UsbDk 可用，但没有枚举到设备。")
-        return 0
-    rows = [
-        [
-            item.get("deviceId"),
-            f"{item.get('vid')}:{item.get('pid')}",
-            item.get("speed"),
-            item.get("port"),
-            item.get("instanceId"),
-        ]
-        for item in devices
-    ]
-    if not args.quiet:
-        print_table(["设备 ID", "VID:PID", "速度", "端口", "实例 ID"], rows)
-    return 0
-
-
 def add_parser(sub):
     p = sub.add_parser(
         "usb",
@@ -1084,16 +1028,6 @@ def add_parser(sub):
     s.add_argument("transfer_id", type=int, help="传输 ID")
     s.add_argument("--id", dest="session", default="cli", metavar="ID", help="目标会话（默认 cli）")
     s.set_defaults(func=_todo("replay"))
-
-    # ── UsbDk 原始访问（spike） ──────────────────────────
-    r = ps.add_parser("raw", help="UsbDk 原始访问（任意设备；spike：诊断/枚举）")
-    rs = r.add_subparsers(dest="usb_raw_sub", metavar="<sub>")
-
-    s = rs.add_parser("doctor", parents=[common_parser()], help="UsbDk 安装与服务诊断")
-    s.set_defaults(func=run_command(_raw_doctor))
-
-    s = rs.add_parser("devices", parents=[common_parser()], help="列出 UsbDk 可见设备")
-    s.set_defaults(func=run_command(_raw_devices))
 
     # ── 测试（M4） ────────────────────────────────────────
     t = ps.add_parser("test", help="声明式回归用例")

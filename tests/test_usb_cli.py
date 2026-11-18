@@ -140,7 +140,7 @@ def main() -> int:
     # ── 1. 命令面 ────────────────────────────────────────
     code, out, _ = run_cli(["usb", "--help"])
     check("usb --help 退出码 0", code == 0, str(code))
-    for sub in ("doctor", "list", "control", "desc", "capture", "raw", "test"):
+    for sub in ("doctor", "list", "control", "desc", "capture", "test"):
         check(f"usb --help 含 {sub}", sub in out)
 
     code, out, _ = run_cli([])
@@ -396,61 +396,6 @@ def main() -> int:
         ns(),
     )
     check("test list 显示用例格式", code == 0 and "demo" in out, out)
-
-    # ── 2d. raw（UsbDk spike） ───────────────────────────
-    raw_doctor = {
-        "supported": True,
-        "installed": False,
-        "path": None,
-        "service": False,
-        "available": False,
-        "devices": [],
-        "error": None,
-        "warnings": ["未找到 UsbDkHelper.dll：安装 UsbDk 后重启"],
-    }
-    code, out, _ = capture(
-        usb_cmd._raw_doctor, StubClient({"/api/usb/raw/doctor": raw_doctor}), ns()
-    )
-    check("raw doctor 未安装仍退出 0", code == 0 and "UsbDk" in out, out)
-    check("raw doctor 给安装指引", "安装 UsbDk" in out, out)
-
-    code, _, err = capture(
-        usb_cmd._raw_devices,
-        StubClient(
-            {
-                "/api/usb/raw/devices": {
-                    "success": False,
-                    "code": "usbdk_unavailable",
-                    "error": "UsbDk 不可用",
-                }
-            }
-        ),
-        ns(),
-    )
-    check("raw devices 不可用退出 1", code == 1 and "UsbDk" in err, err)
-
-    code, out, _ = capture(
-        usb_cmd._raw_devices,
-        StubClient(
-            {
-                "/api/usb/raw/devices": {
-                    "success": True,
-                    "devices": [
-                        {
-                            "deviceId": r"USB\VID_C251&PID_0002\1",
-                            "instanceId": "1",
-                            "vid": "0xC251",
-                            "pid": "0x0002",
-                            "speed": "high",
-                            "port": 3,
-                        }
-                    ],
-                }
-            }
-        ),
-        ns(),
-    )
-    check("raw devices 表格含 VID", code == 0 and "0xC251" in out, out)
 
     # ── 3. doctor（M1） ──────────────────────────────────
     code, out, _ = capture(
