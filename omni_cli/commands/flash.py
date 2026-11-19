@@ -43,6 +43,8 @@ def add_parser(sub):
     s.add_argument("--no-verify", action="store_true", help="烧录后不校验")
     s.add_argument("--no-reset", action="store_true", help="烧录后不复位运行")
     s.add_argument("--base-address", help="基地址（十六进制或十进制）")
+    s.add_argument("--erase", default="sector", choices=["sector", "chip"],
+                   help="擦除模式：sector 只擦镜像覆盖的扇区（默认），chip 整片擦除")
     # 擦除+写入+校验经常超过 30s（1MB 全片擦除实测约 16s），默认放宽到 180s
     s.set_defaults(func=run_command(_program), timeout=180)
 
@@ -125,6 +127,7 @@ def _program(c: ApiClient, args):
         "verify": not args.no_verify,
         "reset": not args.no_reset,
         "base_address": parse_int(args.base_address),
+        "erase": args.erase,
     }
     data = c.post(f"/api/probes/{uid}/flash/program", payload)
     _report_flash_result(args, "烧录", data)
@@ -315,4 +318,10 @@ def _report_flash_result(args, label: str, data: dict, bytes_key: str = "bytes_w
         return
     n = data.get(bytes_key)
     amount = f"{n} 字节  " if n is not None else ""
-    print(f"{label}成功: {amount}耗时 {data.get('duration_ms')}ms")
+    phases = [
+        (name, data.get(key))
+        for name, key in (("擦除", "erase_ms"), ("编程", "program_ms"), ("校验", "verify_ms"))
+        if data.get(key)
+    ]
+    phase_text = "（" + " / ".join(f"{name} {ms}ms" for name, ms in phases) + "）" if phases else ""
+    print(f"{label}成功: {amount}耗时 {data.get('duration_ms')}ms{phase_text}")

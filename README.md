@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.40.0**（调试命令的静默失败修正 / 内存读取不再被 RTT 抓取吞掉）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.41.0**（烧录阶段耗时与擦除模式 / 抓包树补 IAD 与字符串 / 后端启动自检）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 

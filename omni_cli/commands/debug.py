@@ -7,6 +7,7 @@ CLI 每条命令都是独立进程，因此 `omni debug elf load` 之后可直�
 下一条命令里下断点、查寄存器，不需要在同一进程内维持会话。
 """
 
+import argparse
 import json
 import os
 import sys
@@ -143,8 +144,9 @@ def add_parser(sub):
     _uid(ss)
     ss.add_argument("--addr", required=True, help="起始地址（hex 或符号表达式，如 0x20000000 / &counter）")
     ss.add_argument("--size", type=int, default=64, help="读取字节数（1-1024，默认 64）")
-    ss.add_argument("--block", action="store_true",
-                    help="阻塞读：等探针空闲（RTT 抓取会占锁），默认用非侵入读取，被占用时跳过")
+    ss.add_argument("--block", action=argparse.BooleanOptionalAction, default=True,
+                    help="阻塞读：等探针空闲再读（默认开）。RTT 抓取会占探针锁，"
+                         "关掉后用非侵入读取，被占用时跳过并报错")
     ss.set_defaults(func=run_command(_mem_read))
 
     ss = sm.add_parser("resolve", parents=[common_parser()], help="解析地址表达式（hex / &符号 / name[下标]）")
@@ -527,8 +529,8 @@ def _mem_read(c: ApiClient, args):
         data.setdefault(
             "warning",
             "读取被跳过：有调试操作正在占用探针（RTT 抓取也会占用）。"
-            "先 `omni rtt stop`、加 `--block` 等待探针空闲，"
-            "或改用 `omni commander exec read32 <addr> <len>`。",
+            "先 `omni rtt stop` 或改用 `omni commander exec read32 <addr> <len>`；"
+            "本命令默认已加 --block，若显式用了 --no-block 可去掉它。",
         )
         if args.json_ or args.quiet:
             finish(args, data, "")

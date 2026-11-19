@@ -435,6 +435,21 @@ def start_persistent(timeout: int = 30, service_name: str = settings.DEFAULT_SER
             f"后端（{svc.name}）端口未在期限内就绪" + _log_tail(svc.log_file()),
             kind="error",
         )
+
+    # 握手行在 bind 之前打印：刚“可达”也可能随即退出（端口被占、依赖缺失、
+    # 父进程退出时被一起回收）。再确认一次，别把死掉的后端报成“已启动”。
+    time.sleep(0.25)
+    if proc.poll() is not None or not _wait_reachable(port, time.time() + 3.0):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise ApiError(
+            0,
+            f"后端（{svc.name}）启动后立即退出或不可达"
+            f"（exit={proc.poll()}，端口={port}）" + _log_tail(svc.log_file()),
+            kind="error",
+        )
     settings.write_runtime({"pid": proc.pid, "port": port, "managed": False, "service": svc.name},
                            svc.name)
     return {"pid": proc.pid, "port": port}

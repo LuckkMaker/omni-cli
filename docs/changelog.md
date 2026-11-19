@@ -3,6 +3,21 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.41.0（2026-11-19）
+
+- `flash program --erase {sector,chip}`：可选擦除模式。默认 `sector` 只擦镜像覆盖的扇区；
+  `chip` 整片擦除（本机 256 KB 实测 0.3 s，比逐扇区 18.9 s 快得多，但随后要重写全部页）。
+- `flash program` 返回阶段耗时：`--json` 增加 `erase_ms` / `program_ms` / `verify_ms`，
+  人类输出把它们附在总耗时后面。实测 105 KB：sector 擦除 18.9 s、校验 18.5 s；
+  chip 擦除 0.3 s + 编程 25.1 s。
+- `usb capture devices` 树补 IAD 与字符串：新增 `IAD 接口关联` 节点（接口范围 / 功能类 /
+  `iFunction` 字符串），配置节点带配置字符串，接口节点带接口名（需要抓包里存在对应
+  STRING 描述符）。
+- `debug mem read` 默认改为阻塞读（等价 `--block`）；新增 `--no-block` 保留"探针被占用
+  就跳过"的旧语义（GUI 周期刷新用）。
+- `backend start` 在握手文件之后再确认一次存活：进程已退出或端口 3 s 内不可达时报错
+  （附后端日志尾部），不再把刚死掉的后端报成"已启动"。
+
 ## 0.40.0（2026-11-19）
 
 - `commander exec` 不再崩溃：`commander exec <cmd...>` 把参数解析成 list，服务路由把它当
