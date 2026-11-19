@@ -34,7 +34,12 @@ def service_for(args) -> str:
     explicit = getattr(args, "service", None)
     if explicit:
         return settings.service(explicit).name
-    return COMMAND_SERVICE.get(getattr(args, "command", None), settings.DEFAULT_SERVICE)
+    command = getattr(args, "command", None)
+    if isinstance(command, (list, tuple)):
+        # `commander exec <cmd...>` takes the raw command as a list; a list is
+        # not hashable and the routing table is keyed by command group
+        command = command[0] if command else None
+    return COMMAND_SERVICE.get(command, settings.DEFAULT_SERVICE)
 
 
 def leaf_subcommand(args) -> str:

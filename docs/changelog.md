@@ -3,6 +3,14 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.40.0（2026-11-19）
+
+- `commander exec` 不再崩溃：`commander exec <cmd...>` 把参数解析成 list，服务路由把它当
+  dict key 用，触发 `TypeError: unhashable type: 'list'`。
+- `debug mem read` 不再静默返回空数据：非侵入读取用 try-acquire 拿探针锁，RTT 抓取运行中
+  会被跳过（实测 6 次跳过 3 次），旧版仍报 `success: true` 且退出码 0。现在 JSON 增加
+  `warning` 字段并以退出码 1 结束，人类可读模式提示"探针被占用（如 RTT 抓取）"。
+
 ## 0.39.1（2026-11-19）
 
 - 「OMNI CLI Shell」横幅显示后端的提权状态：`后端 bus: 运行中 …（后端未提权：capture start 会失败）`。

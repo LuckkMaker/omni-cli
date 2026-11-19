@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.39.1**（USB 抓包数据列 / 滚动暂停 / 终端入口）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.40.0**（调试命令的静默失败修正 / 内存读取不再被 RTT 抓取吞掉）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 

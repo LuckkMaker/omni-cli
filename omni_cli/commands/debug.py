@@ -519,16 +519,26 @@ def _mem_read(c: ApiClient, args):
         return 1
     data = c.post(f"/api/probes/{uid}/zone/memory/read",
                   {"address": addr, "length": args.size})
+    if data.get("skipped"):
+        # 非侵入读取用 try-acquire 拿探针锁：RTT 抓取或其他调试操作占用时直接跳过。
+        # 对脚本来说这就是一次失败的读取，不能当成功返回空数据。
+        data.setdefault(
+            "warning",
+            "读取被跳过：有调试操作正在占用探针（RTT 抓取也会占用）。"
+            "先 `omni rtt stop`，或改用 `omni commander exec read32 <addr> <len>`。",
+        )
+        if args.json_ or args.quiet:
+            finish(args, data, "")
+        else:
+            print(f"读取被跳过（探针被占用，如 RTT 抓取）  {_addr(addr)}  {data.get('length')} 字节")
+        return 1
     if args.json_ or args.quiet:
         finish(args, data, "")
-        return 0
-    if data.get("skipped"):
-        print(f"跳过本轮读取（有调试操作正在进行）  {_addr(addr)}  {data.get('length')} 字节")
         return 0
     raw = data.get("data_hex") or ""
     if not raw:
         print(f"无数据  {_addr(addr)}")
-        return 0
+        return 1
     print(_hex_dump(addr, bytes.fromhex(raw)))
     return 0
 
