@@ -10,6 +10,17 @@
 - `debug mem read` 不再静默返回空数据：非侵入读取用 try-acquire 拿探针锁，RTT 抓取运行中
   会被跳过（实测 6 次跳过 3 次），旧版仍报 `success: true` 且退出码 0。现在 JSON 增加
   `warning` 字段并以退出码 1 结束，人类可读模式提示"探针被占用（如 RTT 抓取）"。
+- `debug mem read --block`：阻塞等探针空闲再读（halt + 读），RTT 抓取开着也能稳定取到值
+  （实测 6/6 成功）；后端 `/zone/memory/read` 新增 `block` 字段区分"显式读取"与 GUI 刷新。
+- `probe list|status --no-sectors`：省略 `target.sectors` 全量表，256 KB Flash 的
+  `probe status --json` 从 25 KB 降到 0.75 KB（保留 `sector_count` 与页/扇区大小）。
+- `usb desc parse` 语义化：IAD 显示为"接口关联"并带 `iFunction`/`iInterface`；CDC 功能
+  描述符显示 Header/Call-Management/ACM/Union/NCM/…；接口行补类名（如 `CDC-Data(0x0A)`）。
+- `debug watch eval` 在 `info` 为空或 `available=false` 时报错（JSON 带 `warning`，退出码 1），
+  后端重启丢 ELF 会话时提示先 `debug elf load`；不再 `success: true` 返回空结果。
+- `flash program` 失败且错误含 "not connected" 时提示先 `probe disconnect` + `connect`
+  （探针句柄被 JLink.exe / Keil 占用过后会出现）。
+- `net ping` 全丢包时提示目标可能被 halt，或本机网卡/静态 IP 未配置。
 
 ## 0.39.1（2026-11-19）
 

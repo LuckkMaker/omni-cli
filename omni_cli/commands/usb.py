@@ -813,6 +813,61 @@ def _load_json(path: str) -> dict:
         raise ValueError(f"{path} 不是合法 JSON：{exc}") from None
 
 
+_CLASS_NAMES = {
+    0x00: "defined-by-interface", 0x01: "Audio", 0x02: "CDC-Control", 0x03: "HID",
+    0x07: "Printer", 0x08: "Mass-Storage", 0x09: "Hub", 0x0A: "CDC-Data",
+    0x0B: "Smart-Card", 0x0D: "Content-Security", 0x0E: "Video",
+    0x0F: "Personal-Healthcare", 0x10: "Audio/Video", 0x11: "Billboard",
+    0x12: "Type-C-Bridge", 0xDC: "Diagnostic", 0xE0: "Wireless",
+    0xEF: "Miscellaneous", 0xFE: "Application-Specific", 0xFF: "Vendor-Specific",
+}
+
+_CDC_FUNC_NAMES = {
+    0x00: "Header", 0x01: "Call-Management", 0x02: "ACM", 0x03: "Direct-Line",
+    0x04: "Telephone-Ringing", 0x05: "RNDIS", 0x06: "Union", 0x07: "Country-Selection",
+    0x08: "Telephone-Modes", 0x09: "USB-Terminal", 0x0A: "Net-Channel-Terminal",
+    0x0B: "Protocol-Unit", 0x0C: "Extension-Unit", 0x0D: "Multi-Channel",
+    0x0E: "CAPI-Control", 0x0F: "Ethernet-Networking", 0x10: "ATM-Networking",
+    0x11: "WHCM", 0x12: "Device-Management", 0x13: "OBEX", 0x14: "Command-Set",
+    0x15: "Command-Set-Rev", 0x16: "Telephony-Data", 0x17: "MDLM", 0x18: "Table",
+    0x1A: "NCM", 0x1B: "MBIM",
+}
+
+
+def _int_or_none(value):
+    try:
+        return int(str(value), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _class_label(value) -> str:
+    """0xEF -> 'Miscellaneous(0xEF)'；认不出时原样返回。"""
+    number = _int_or_none(value)
+    if number is None:
+        return str(value)
+    name = _CLASS_NAMES.get(number)
+    return f"{name}(0x{number:02X})" if name else f"0x{number:02X}"
+
+
+def _class_desc_label(item: dict) -> str:
+    """给类描述符一个语义名：IAD / CDC 功能描述符 / 其它。"""
+    desc_type = _int_or_none(item.get("type"))
+    subtype = _int_or_none(item.get("subtype"))
+    if desc_type == 0x0B:
+        first = item.get("firstInterface", "?")
+        count = item.get("interfaceCount", "?")
+        return (
+            f"IAD 接口关联: iface {first}..{int(first) + int(count) - 1 if isinstance(first, int) and isinstance(count, int) else '?'}"
+            f"，类 {_class_label(item.get('class'))}/{item.get('subClass')}/{item.get('protocol')}"
+            f"，iFunction {item.get('iFunction')}"
+        )
+    if desc_type == 0x24:
+        name = _CDC_FUNC_NAMES.get(subtype) if subtype is not None else None
+        return f"CDC 功能: {name or 'subtype-' + str(subtype)}"
+    return f"类描述符 {item.get('type')}"
+
+
 def _document_lines(doc: dict) -> list[str]:
     """把描述符文档渲染成人读的摘要（不展开原始 hex，hex 由 build/emit 给）。"""
     lines: list[str] = []
@@ -833,30 +888,22 @@ def _document_lines(doc: dict) -> list[str]:
         interfaces = config.get("interfaces") or []
         lines.append(
             f"配置 {config.get('value', index)}: {config.get('maxPower', 0)} mA，"
-            f"{len(interfaces)} 接口，属性 {config.get('attributes', '-')}"
+            f"{len(interfaces)} 接口，属性 {config.get('attributes', '-')}，"
+            f"iConfiguration {config.get('iConfiguration', 0)}"
         )
         for item in config.get("classDescriptors") or []:
-            lines.append(
-                f"  类描述符 {item.get('type')} "
-                + (f"subtype {item.get('subtype')} " if item.get("subtype") is not None else "")
-                + f"hex {item.get('hex', '-')}"
-            )
+            lines.append(f"  {_class_desc_label(item)}  hex {item.get('hex', '-')}")
         for interface in interfaces:
             for alt in interface.get("alternates") or []:
                 lines.append(
                     f"  接口 {interface.get('number')} alt {alt.get('alternate', 0)}: "
-                    f"class {alt.get('class', '-')}/{alt.get('subClass', 0)}/"
-                    f"{alt.get('protocol', 0)}，{len(alt.get('endpoints') or [])} 端点"
+                    f"class {_class_label(alt.get('class'))}/{alt.get('subClass', 0)}/"
+                    f"{alt.get('protocol', 0)}，{len(alt.get('endpoints') or [])} 端点，"
+                    f"iInterface {alt.get('iInterface', 0)}"
                 )
                 for descriptor in alt.get("classDescriptors") or []:
                     lines.append(
-                        f"    类描述符 {descriptor.get('type')} "
-                        + (
-                            f"subtype {descriptor.get('subtype')} "
-                            if descriptor.get("subtype") is not None
-                            else ""
-                        )
-                        + f"hex {descriptor.get('hex', '-')}"
+                        f"    {_class_desc_label(descriptor)}  hex {descriptor.get('hex', '-')}"
                     )
                 for endpoint in alt.get("endpoints") or []:
                     address = endpoint.get("address", "0x00")

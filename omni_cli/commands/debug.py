@@ -143,6 +143,8 @@ def add_parser(sub):
     _uid(ss)
     ss.add_argument("--addr", required=True, help="起始地址（hex 或符号表达式，如 0x20000000 / &counter）")
     ss.add_argument("--size", type=int, default=64, help="读取字节数（1-1024，默认 64）")
+    ss.add_argument("--block", action="store_true",
+                    help="阻塞读：等探针空闲（RTT 抓取会占锁），默认用非侵入读取，被占用时跳过")
     ss.set_defaults(func=run_command(_mem_read))
 
     ss = sm.add_parser("resolve", parents=[common_parser()], help="解析地址表达式（hex / &符号 / name[下标]）")
@@ -518,14 +520,15 @@ def _mem_read(c: ApiClient, args):
     if addr is None:
         return 1
     data = c.post(f"/api/probes/{uid}/zone/memory/read",
-                  {"address": addr, "length": args.size})
+                  {"address": addr, "length": args.size, "block": bool(args.block)})
     if data.get("skipped"):
         # 非侵入读取用 try-acquire 拿探针锁：RTT 抓取或其他调试操作占用时直接跳过。
         # 对脚本来说这就是一次失败的读取，不能当成功返回空数据。
         data.setdefault(
             "warning",
             "读取被跳过：有调试操作正在占用探针（RTT 抓取也会占用）。"
-            "先 `omni rtt stop`，或改用 `omni commander exec read32 <addr> <len>`。",
+            "先 `omni rtt stop`、加 `--block` 等待探针空闲，"
+            "或改用 `omni commander exec read32 <addr> <len>`。",
         )
         if args.json_ or args.quiet:
             finish(args, data, "")
@@ -744,13 +747,25 @@ def _watch_eval(c: ApiClient, args):
     if not uid:
         return 1
     data = c.post(f"/api/probes/{uid}/zone/watch/eval", {"name": args.expr})
+    info = data.get("info")
+    # info 为 null 或 available=false 时不能当成功：后端重启会丢 ELF 会话，
+    # 目标运行中则读不到值，脚本只查 success 会静默拿到空结果。
+    if not info or info.get("available") is False:
+        if not info:
+            hint = ("表达式无法解析：ELF 会话可能已失效（后端重启会丢会话），"
+                    "先 `omni debug elf load <axf>`")
+        else:
+            hint = ("值不可用：目标可能正在运行，先 `omni debug halt`，"
+                    "或确认该表达式在当前帧作用域内")
+        data.setdefault("warning", f"{hint}（状态: {data.get('state')}）")
+        if args.json_ or args.quiet:
+            finish(args, data, "")
+        else:
+            print(f"{hint}（状态: {data.get('state')}）")
+        return 1
     if args.json_ or args.quiet:
         finish(args, data, "")
         return 0
-    info = data.get("info")
-    if not info:
-        print(f"无法解析 {args.expr!r}（状态: {data.get('state')}）")
-        return 1
     _print_info_tree(info, 0)
     return 0
 

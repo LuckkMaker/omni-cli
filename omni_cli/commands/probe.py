@@ -17,6 +17,8 @@ def add_parser(sub):
     s = ps.add_parser("list", parents=[common_parser()], help="列出所有已连接探针")
     s.add_argument("--refresh", action="store_true",
                    help="强制重新枚举（默认读 1~2s 监控快照；刚 connect 后以 probe status 为准）")
+    s.add_argument("--no-sectors", action="store_true",
+                   help="省略 target.sectors 全量表（256 KB Flash 会输出 256 项、几十 KB）")
     s.set_defaults(func=run_command(_list))
 
     s = ps.add_parser("connect", parents=[common_parser()], help="连接指定探针（--target 必填）")
@@ -42,6 +44,8 @@ def add_parser(sub):
 
     s = ps.add_parser("status", parents=[common_parser()], help="查询探针连接状态")
     s.add_argument("uid")
+    s.add_argument("--no-sectors", action="store_true",
+                   help="省略 target.sectors 全量表（只保留 sector_count 与页/扇区大小）")
     s.set_defaults(func=run_command(_status))
 
     s = ps.add_parser("target", parents=[common_parser()], help="查询或设置目标芯片型号")
@@ -59,10 +63,24 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_jlink_devices))
 
 
+def _strip_sectors(data):
+    """把 target.sectors 全量表换成 sector_count（--no-sectors）。"""
+    def trim(target):
+        if isinstance(target, dict) and "sectors" in target:
+            target["sector_count"] = len(target.pop("sectors") or [])
+
+    trim(data.get("target"))
+    for probe in data.get("probes") or []:
+        trim(probe.get("target"))
+    return data
+
+
 def _list(c: ApiClient, args):
     # 默认读监控快照（避免每次请求都做 USB 枚举）；--refresh 强制实时枚举
     path = "/api/probes?refresh=true" if getattr(args, "refresh", False) else "/api/probes"
     data = c.get(path)
+    if getattr(args, "no_sectors", False):
+        _strip_sectors(data)
     probes = data.get("probes", [])
     if args.json_:
         finish(args, data, "")
@@ -111,6 +129,8 @@ def _disconnect(c: ApiClient, args):
 
 def _status(c: ApiClient, args):
     data = c.get(f"/api/probes/{args.uid}/status")
+    if getattr(args, "no_sectors", False):
+        _strip_sectors(data)
     head = f"uid={data.get('uid')}  state={data.get('state')}"
     finish(args, data, _head_block(head, data.get("target")))
     return 0

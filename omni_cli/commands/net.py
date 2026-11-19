@@ -674,6 +674,9 @@ def _print_ping_result(args, result: dict) -> int:
         if result.get("received"):
             print(f"时延 min/avg/max = {result.get('min')}/{result.get('avg')}/"
                   f"{result.get('max')} ms")
+        else:
+            print("提示：目标可能被 halt（`omni debug status` 看状态，`omni debug run` 恢复），"
+                  "或本机网卡/静态 IP 未配置（`omni net interfaces`）。")
     return 0 if result.get("received") else 1
 
 

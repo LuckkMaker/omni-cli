@@ -307,6 +307,11 @@ def _report_flash_result(args, label: str, data: dict, bytes_key: str = "bytes_w
     _note_rtt_stopped(data)
     if not data.get("success"):
         print(f"{label}失败: {data.get('error')}")
+        message = str(data.get("error") or "")
+        if "not connected" in message.lower() or "未连接" in message:
+            print("提示：探针句柄可能已被其它工具（JLink.exe / Keil / Ozone）占用过，"
+                  "后端记录的连接已失效：先 `omni probe disconnect <uid>`，"
+                  "再 `omni probe connect <uid> -t <part>` 后重试。")
         return
     n = data.get(bytes_key)
     amount = f"{n} 字节  " if n is not None else ""
