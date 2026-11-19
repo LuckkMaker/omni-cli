@@ -6,6 +6,7 @@
 import json
 import os
 import sys
+import unicodedata
 
 # ---------------------------------------------------------------- 颜色
 
@@ -167,27 +168,88 @@ def print_json(data) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def render_table(headers: list[str], rows: list[list]) -> str:
-    """无第三方依赖的简单表格渲染（等宽对齐，保证 --json 之外也好看）。"""
+def display_width(text: str) -> int:
+    """终端显示宽度：CJK 全角记 2 列，组合字符记 0 列。"""
+    width = 0
+    for ch in str(text):
+        if unicodedata.combining(ch):
+            continue
+        width += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return width
+
+
+def _truncate(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if display_width(text) <= width:
+        return text
+    kept: list[str] = []
+    used = 0
+    for ch in text:
+        step = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if used + step > width - 1:
+            break
+        kept.append(ch)
+        used += step
+    return "".join(kept) + "…"
+
+
+def _pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - display_width(text))
+
+
+def table_widths(headers: list[str], rows: list[list], cap: int = 60) -> list[int]:
+    """按显示宽度计算每列宽度；多行单元格取最长一行。"""
+    widths = [display_width(_to_str(h)) for h in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            if index >= len(widths):
+                continue
+            widest = max(
+                (display_width(line) for line in _to_str(cell).split("\n")), default=0
+            )
+            widths[index] = max(widths[index], widest)
+    return [min(width, cap) for width in widths]
+
+
+def render_table(
+    headers: list[str],
+    rows: list[list],
+    *,
+    widths: list[int] | None = None,
+    show_header: bool = True,
+) -> str:
+    """无第三方依赖的表格渲染：按显示宽度对齐，单元格可用 ``\\n`` 换行。
+
+    ``widths`` 可复用上一次算好的列宽（follow 模式用它保证跨批次对齐）。
+    """
     rows_s = [[_to_str(c) for c in r] for r in rows]
-    widths = [len(h) for h in headers]
-    for r in rows_s:
-        for i, c in enumerate(r):
-            if i < len(widths):
-                widths[i] = max(widths[i], len(c))
-    widths = [min(w, 60) for w in widths]
+    if widths is None:
+        widths = table_widths(headers, rows_s)
 
-    def fmt_row(cells):
-        pad = []
-        for i, c in enumerate(cells):
-            w = widths[i] if i < len(widths) else 0
-            pad.append(c if len(c) <= w else c[: w - 1] + "…")
-        return "  ".join(cell.ljust(widths[i]) if i < len(widths)
-                         else cell for i, cell in enumerate(pad))
+    def render_row(cells: list[str]) -> list[str]:
+        parts: list[list[str]] = []
+        for index, cell in enumerate(cells):
+            lines = cell.split("\n")
+            if index < len(widths):
+                lines = [_truncate(line, widths[index]) for line in lines]
+            parts.append(lines)
+        height = max((len(part) for part in parts), default=1)
+        out: list[str] = []
+        for line_index in range(height):
+            cells_out = []
+            for index, part in enumerate(parts):
+                text = part[line_index] if line_index < len(part) else ""
+                cells_out.append(_pad(text, widths[index]) if index < len(widths) else text)
+            out.append("  ".join(cells_out).rstrip())
+        return out
 
-    lines = [fmt_row(headers), "  ".join("-" * w for w in widths)]
-    for r in rows_s:
-        lines.append(fmt_row(r))
+    lines: list[str] = []
+    if show_header:
+        lines.extend(render_row([_to_str(h) for h in headers]))
+        lines.append("  ".join("-" * width for width in widths))
+    for row in rows_s:
+        lines.extend(render_row(row))
     return "\n".join(lines)
 
 

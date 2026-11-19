@@ -5,7 +5,6 @@
 - 抓包：doctor、capture start|stop|status|transfers|detail|devices|open|save
 - 测试：test run（离线 pcap 断言 + 真机动作）/ test list
 
-``capture replay`` 仍是长期项（未实现）。
 """
 
 from __future__ import annotations
@@ -13,22 +12,25 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
+from .. import settings
 from ..client import ApiClient
-from ..formatting import ctx_error, print_table
+from ..formatting import (
+    ctx_error,
+    display_width,
+    print_table,
+    render_table,
+    table_widths,
+)
 from ..options import common_parser
 from ..runtime import finish, run_command
 from ._stream import hexdump, run_cursor_stream
 from .serial import _parse_hex
-
-#: 尚未实现的能力 → 里程碑（当前只剩 replay）
-_MILESTONES = {
-    "replay": "长期项",
-}
 
 #: 失败码 → 可执行的下一步
 _HINTS = {
@@ -52,22 +54,10 @@ _HINTS = {
     "winusb_invalid": "参数无效：检查 hex 数据与长度。",
 }
 
-_TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "方向", "类型", "长度", "状态", "摘要"]
+_TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "Phase", "长度", "状态", "数据", "描述"]
 
-
-def _todo(feature: str):
-    """未实现处理器：不连接后端，直接给出计划与下一步。"""
-
-    milestone = _MILESTONES.get(feature, "后续")
-    planned = "" if milestone in ("长期项", "后续") else f"（计划 {milestone}）"
-
-    def _handler(_args):
-        return ctx_error(
-            f"omni usb {feature} 尚未实现{planned}。"
-            "里程碑与验收见 omni-backend/docs/usb-plan.md。"
-        )
-
-    return _handler
+#: 数据列每行显示的字节数（8 字节 = 23 列，窗口过窄时降到 4）
+_DATA_BYTES_PER_LINE = 8
 
 
 def _failure(data: dict, default: str) -> int:
@@ -93,44 +83,201 @@ def _endpoint_text(address: int) -> str:
     return f"0x{int(address):02X}"
 
 
-def _transfer_rows(items: list[dict]) -> list[list]:
-    rows = []
-    for item in items:
-        rows.append(
-            [
-                item.get("id"),
-                _ts_text(item.get("ts")),
-                f"{item.get('bus')}.{item.get('device')}",
-                _endpoint_text(item.get("endpoint", 0)),
-                str(item.get("direction", "")).upper(),
-                item.get("typeLabel") or "-",
-                item.get("length"),
-                item.get("statusName") or "-",
-                item.get("summary") or "",
-            ]
-        )
-    return rows
+def _data_text(item: dict, limit: int, per_line: int = _DATA_BYTES_PER_LINE) -> str:
+    """把一行的 payload 渲染成多行 hex（默认每行 16 字节），超限截断并标注。"""
+    text = item.get("dataHex") or ""
+    if not text:
+        return "-"
+    parts = text.split()
+    shown = parts[: max(0, limit)]
+    if not shown:
+        return "…"
+    lines = [
+        " ".join(shown[start : start + per_line])
+        for start in range(0, len(shown), per_line)
+    ]
+    if len(parts) > len(shown) or item.get("dataTruncated"):
+        lines[-1] += " …"
+    return "\n".join(lines)
 
 
-def _transfer_line(item: dict) -> str:
-    """follow 模式的单行输出：列固定、不依赖表格宽度。"""
-    return (
-        f"{item.get('id'):>6}  {_ts_text(item.get('ts'))}  "
-        f"{item.get('bus')}.{item.get('device')}  "
-        f"{_endpoint_text(item.get('endpoint', 0))}  "
-        f"{str(item.get('direction', '')).upper():<3}  "
-        f"{(item.get('typeLabel') or '-'):<11}  "
-        f"{item.get('length'):>6}  "
-        f"{(item.get('statusName') or '-'):<10}  "
-        f"{item.get('summary') or ''}"
+def _setup_text(item: dict, per_line: int) -> str:
+    """控制传输 SETUP 的八字节，按每行字节数折行。"""
+    parts = (item.get("setupHex") or "").split()[:8]
+    if not parts:
+        return "-"
+    return "\n".join(
+        " ".join(parts[start : start + per_line])
+        for start in range(0, len(parts), per_line)
     )
 
 
-def _print_transfers(items: list[dict]) -> None:
-    print_table(_TRANSFER_HEADERS, _transfer_rows(items))
+def _description(item: dict) -> str:
+    """Bus Hound 风格的一行描述：控制传输给请求名，批量/中断只保留类级解码。"""
+    text = (item.get("summary") or "").strip()
+    kind = item.get("type")
+    if kind is None:
+        kind = {"control": 2, "bulk": 3, "interrupt": 1, "isochronous": 0}.get(
+            str(item.get("typeLabel") or "").lower()
+        )
+    if kind == 2:
+        return text.split(" wLength=")[0]
+    if text.startswith(("BULK ", "INTERRUPT ", "ISOCHRONOUS ", "ISO ")):
+        return ""
+    return text
 
 
-def _environment_text(env: dict) -> str:
+def _transfer_rows(
+    items: list[dict],
+    data_bytes: int = 64,
+    per_line: int = _DATA_BYTES_PER_LINE,
+    show_setup: bool = True,
+) -> list[list]:
+    """一条 URB 一行；控制传输拆成 CTL（SETUP）+ IN/OUT（数据阶段）两行。"""
+    rows: list[list] = []
+    for item in items:
+        device = f"{item.get('bus')}.{item.get('device')}"
+        endpoint = _endpoint_text(item.get("endpoint", 0))
+        status = item.get("statusName") or "-"
+        desc = _description(item)
+        kind = item.get("type")
+        if kind is None:
+            kind = {"control": 2, "bulk": 3, "interrupt": 1, "isochronous": 0}.get(
+                str(item.get("typeLabel") or "").lower()
+            )
+        direction = str(item.get("direction", "")).upper()
+
+        def base(phase, length, data_text):
+            row = [
+                item.get("id"),
+                _ts_text(item.get("ts")),
+                device,
+                endpoint,
+                phase,
+                length,
+                status,
+            ]
+            if data_bytes:
+                row.append(data_text)
+            row.append(desc)
+            return row
+
+        if show_setup and kind == 2 and item.get("setupHex"):
+            rows.append(base("CTL", 0, _setup_text(item, per_line) if data_bytes else ""))
+            body = _data_text(item, data_bytes, per_line) if data_bytes else ""
+            if body and body != "-":
+                row = ["", "", device, endpoint, direction or "IN",
+                       item.get("length"), ""]
+                if data_bytes:
+                    row.append(body)
+                row.append("")
+                rows.append(row)
+            continue
+
+        phase = "URB" if kind not in (0, 1, 2, 3) else (direction or "-")
+        if kind == 2 and not item.get("length"):
+            phase = "CTL"
+        body = _data_text(item, data_bytes, per_line) if data_bytes else ""
+        rows.append(base(phase, item.get("length"), body))
+    return rows
+
+
+def _transfer_headers(data_bytes: int = 64) -> list[str]:
+    if data_bytes:
+        return list(_TRANSFER_HEADERS)
+    return [header for header in _TRANSFER_HEADERS if header != "数据"]
+
+
+#: 数据列可选的行宽；`--data-per-line` 指定目标值，放不下时向下降级
+_DATA_LINE_CHOICES = (16, 8, 4)
+
+#: follow 模式的固定列宽基数（数据/描述列按窗口宽度再调整）
+_FOLLOW_MIN_WIDTHS = {
+    "ID": 6,
+    "时间": 12,
+    "设备": 5,
+    "端点": 6,
+    "Phase": 6,
+    "长度": 6,
+    "状态": 10,
+    "数据": 49,
+    "描述": 34,
+}
+
+_DESC_MIN_WIDTH = 16
+
+
+def _terminal_columns() -> int:
+    """终端列数；管道/重定向时用 120 作为稳妥默认。"""
+    return max(40, shutil.get_terminal_size((120, 24)).columns)
+
+def _fit_widths(headers: list[str], widths: list[int], columns: int) -> list[int]:
+    """超宽时先压摘要列（最多压到 16 列），数据列宽度不动。"""
+    widths = list(widths)
+    if "描述" not in headers:
+        return widths
+    index = headers.index("描述")
+    total = sum(widths) + 2 * (len(widths) - 1)
+    if total <= columns:
+        return widths
+    widths[index] -= min(total - columns, max(0, widths[index] - _DESC_MIN_WIDTH))
+    return widths
+
+
+def _line_choices(target: int) -> list[int]:
+    """目标行宽优先，放不下时只向更窄的档位降级。"""
+    return [target] + [width for width in (8, 4) if width < target]
+
+
+def _transfer_layout(
+    items: list[dict],
+    data_bytes: int,
+    columns: int,
+    per_line: int = _DATA_BYTES_PER_LINE,
+    show_setup: bool = True,
+) -> tuple[list[str], list[list], list[int]]:
+    """按窗口宽度选每行字节数，返回 (表头, 行, 列宽)。"""
+    headers = _transfer_headers(data_bytes)
+    rows: list[list] = []
+    widths: list[int] = []
+    for line_bytes in _line_choices(per_line):
+        rows = _transfer_rows(items, data_bytes, line_bytes, show_setup)
+        widths = _fit_widths(headers, table_widths(headers, rows), columns)
+        if sum(widths) + 2 * (len(widths) - 1) <= columns:
+            return headers, rows, widths
+    return headers, rows, widths
+
+
+def _follow_layout(
+    data_bytes: int, columns: int, per_line: int = _DATA_BYTES_PER_LINE
+) -> tuple[list[str], int, list[int]]:
+    """follow 用固定列宽（跨批次不跳列），同样按窗口宽度降级。"""
+    headers = _transfer_headers(data_bytes)
+    base = [_FOLLOW_MIN_WIDTHS.get(header, 0) for header in headers]
+    fitted: list[int] = []
+    for line_bytes in _line_choices(per_line):
+        widths = [max(display_width(header), width) for header, width in zip(headers, base)]
+        if data_bytes:
+            widths[headers.index("数据")] = 3 * line_bytes + 1  # 每字节 3 列 + 截断标记
+        fitted = _fit_widths(headers, widths, columns)
+        if sum(fitted) + 2 * (len(fitted) - 1) <= columns:
+            return headers, line_bytes, fitted
+    return headers, _line_choices(per_line)[-1], fitted
+
+
+def _print_transfers(
+    items: list[dict],
+    data_bytes: int = 64,
+    per_line: int = _DATA_BYTES_PER_LINE,
+    show_setup: bool = True,
+) -> None:
+    headers, rows, widths = _transfer_layout(
+        items, data_bytes, _terminal_columns(), per_line, show_setup
+    )
+    print(render_table(headers, rows, widths=widths))
+
+
+def _environment_text(env: dict, bound: str | None = None, show_bound: bool = False) -> str:
     lines = []
     platform = env.get("platform") or env.get("supported")
     lines.append(f"平台        : {platform}")
@@ -146,10 +293,18 @@ def _environment_text(env: dict) -> str:
     lines.append(f"管理员      : {'是' if env.get('elevated') else '否'}")
     devices = env.get("devices") or []
     if devices:
-        labels = ", ".join(str(item.get("label") or item.get("id")) for item in devices)
+        # 打印设备路径而不是标签：USBPcapCMD 的 -d 只认 \\.\USBPcapN，
+        # 短名（USBPcap1）会直接退出且不报错，用户照着提示敲必然抓不到数据。
+        labels = ", ".join(str(item.get("id") or item.get("label")) for item in devices)
         lines.append(f"可抓 root hub: {labels}")
     else:
         lines.append("可抓 root hub: 无")
+    if show_bound:
+        lines.append(
+            f"已绑定 hub  : {bound}"
+            if bound
+            else "已绑定 hub  : 未绑定（capture start 时自动选择唯一的一个）"
+        )
 
     warnings = env.get("warnings") or []
     if warnings:
@@ -175,18 +330,48 @@ def _environment_text(env: dict) -> str:
 
 def _doctor(c: ApiClient, args):
     env = c.get("/api/usb/environment")
-    finish(args, env, _environment_text(env))
+    bound = settings.usb_capture_hub()
+    finish(
+        args,
+        dict(env, boundHub=bound),
+        _environment_text(env, bound, show_bound=True),
+    )
     return 0
 
 
+def _normalize_device(c: ApiClient, wanted: str) -> str:
+    r"""把 ``USBPcap1`` 这类短名补成 ``\\.\USBPcap1``。
+
+    USBPcapCMD 的 ``-d`` 只接受设备路径；传短名时它会立刻退出且 stderr 为空，
+    表现为「已开始捕获」但一条传输都没有。也接受用户按标签/路径大小写混写。
+    """
+    text = wanted.strip()
+    if text.startswith("\\\\"):
+        return text
+    try:
+        env = c.get("/api/usb/environment")
+    except Exception:  # 环境查询失败不该阻断抓包，退回按前缀补全
+        env = {}
+    for item in env.get("devices") or []:
+        if text.lower() in (
+            str(item.get("label") or "").lower(),
+            str(item.get("id") or "").lower(),
+        ):
+            return str(item.get("id") or text)
+    return "\\\\.\\" + text
+
+
 def _pick_device(c: ApiClient, wanted: str | None) -> tuple[str | None, int]:
-    """选择 root hub：显式指定优先，否则要求环境中只有一个。"""
+    """选择 root hub：显式指定 > 已绑定 > 环境中唯一的一个。"""
     if wanted:
-        return wanted, 0
+        return _normalize_device(c, wanted), 0
     env = c.get("/api/usb/environment")
     if not env.get("installed"):
         return None, ctx_error(_environment_text(env))
     devices = env.get("devices") or []
+    bound = settings.usb_capture_hub()
+    if bound and any(item.get("id") == bound for item in devices):
+        return bound, 0
     if len(devices) == 1:
         return devices[0].get("id"), 0
     if not devices:
@@ -198,6 +383,47 @@ def _pick_device(c: ApiClient, wanted: str | None) -> tuple[str | None, int]:
         f"  {item.get('id')}  {item.get('label')}" for item in devices
     )
     return None, ctx_error(f"检测到多个 root hub，请用 --device 指定：\n{listing}")
+
+
+def _capture_bind(c: ApiClient, args):
+    """绑定默认 root hub，之后 ``capture start`` 不用再传 --device。"""
+    env = c.get("/api/usb/environment")
+    if not env.get("installed"):
+        return ctx_error(_environment_text(env))
+    devices = [item for item in env.get("devices") or [] if item.get("id")]
+    if args.device:
+        device = _normalize_device(c, args.device)
+        if device not in {item["id"] for item in devices}:
+            listing = "\n".join(
+                f"  {item.get('id')}  {item.get('label')}" for item in devices
+            )
+            return ctx_error(f"没有这个 root hub：{device}\n可用：\n{listing}")
+    else:
+        if len(devices) != 1:
+            listing = "\n".join(
+                f"  {item.get('id')}  {item.get('label')}" for item in devices
+            )
+            return ctx_error(f"检测到多个 root hub，请用 --device 指定：\n{listing}")
+        device = devices[0]["id"]
+
+    settings.set_usb_capture_hub(device)
+    finish(
+        args,
+        {"bound": device},
+        f"已绑定 root hub: {device}\n"
+        "之后 `omni usb capture start` 不用再传 --device。",
+    )
+    return 0
+
+
+def _capture_unbind(c: ApiClient, args):
+    previous = settings.usb_capture_hub()
+    settings.set_usb_capture_hub(None)
+    text = "已取消 root hub 绑定。"
+    if previous:
+        text = f"已取消绑定（原 {previous}）。"
+    finish(args, {"bound": None}, text + "\n`capture start` 恢复自动选择/多 hub 报错。")
+    return 0
 
 
 def _capture_start(c: ApiClient, args):
@@ -275,11 +501,69 @@ def _transfer_query(args, after_id: int | None) -> str:
             parts.append(f"{key}={int(value)}")
     if args.status:
         parts.append("status=" + args.status)
+    if getattr(args, "vid", None):
+        parts.append("vid=" + args.vid)
+    if getattr(args, "pid", None):
+        parts.append("pid=" + args.pid)
     if args.q:
         from urllib.parse import quote
 
         parts.append("q=" + quote(args.q))
     return "&".join(parts)
+
+
+def _missing_preview(items: list[dict]) -> bool:
+    """所有非空传输都没有 dataHex：说明后端版本较旧，列表里拿不到 payload。"""
+    seen = False
+    for item in items:
+        if (item.get("length") or 0) > 0:
+            seen = True
+            if item.get("dataHex"):
+                return False
+    return seen
+
+
+def _vid_pid_label(vid, pid) -> str | None:
+    """把过滤条件拼成 ``0xC251:0x0005`` / ``0xC251:`` / ``:0x0005``，用于匹配设备树。"""
+    v = _usb_id_value(vid) if vid else None
+    p = _usb_id_value(pid) if pid else None
+    if v is None and p is None:
+        return None
+    left = f"0x{v:04X}" if v is not None else ""
+    right = f"0x{p:04X}" if p is not None else ""
+    return f"{left}:{right}"
+
+
+def _device_tree_text(c: ApiClient) -> str:
+    try:
+        data = c.get("/api/usb/devices")
+    except Exception:
+        return ""
+    return "\n".join(_render_tree(data.get("tree") or []))
+
+
+def _empty_transfers_hint(c: ApiClient, args) -> str:
+    """没有结果时区分「没抓到数据」和「VID/PID 过滤没命中」。"""
+    base = (
+        "没有匹配的传输。抓包时先 `omni usb capture start`，"
+        "再插拔/操作设备；离线分析用 `omni usb capture open --pcap F`。"
+    )
+    if not (getattr(args, "vid", None) or getattr(args, "pid", None)):
+        return base
+    want = f"{args.vid or '-'}:{args.pid or '-'}"
+    try:
+        peek = c.get("/api/usb/transfers?limit=1")
+        total = int(peek.get("total") or 0)
+    except Exception:
+        total = 0
+    if not total:
+        return base
+    return (
+        f"抓包里有 {total} 条传输，但没有 {want} 的匹配。\n"
+        "  设备如果在 capture start 之前就已枚举，抓包里没有它的描述符，VID/PID 映射不到；\n"
+        "  先 `omni usb capture stop` 再 `start`，然后插拔设备。\n"
+        "  也可以 `omni usb capture devices` 确认抓到了哪些设备。"
+    )
 
 
 def _capture_transfers(c: ApiClient, args):
@@ -291,12 +575,14 @@ def _capture_transfers(c: ApiClient, args):
             return 0
         if not items:
             if not args.quiet:
-                print(
-                    "没有匹配的传输。抓包时先 `omni usb capture start`，"
-                    "再插拔/操作设备；离线分析用 `omni usb capture open --pcap F`。"
-                )
+                print(_empty_transfers_hint(c, args))
             return 0
-        _print_transfers(items)
+        if args.data_bytes and _missing_preview(items):
+            print(
+                "提示: 当前后端未返回 payload 预览，数据列显示为 -（升级 OMNI Bus 后端后可用）",
+                file=sys.stderr,
+            )
+        _print_transfers(items, args.data_bytes, args.data_per_line, not args.no_setup)
         return 0
 
     # --follow：用 after_id 轮询，Ctrl+C 正常退出
@@ -307,9 +593,22 @@ def _capture_transfers(c: ApiClient, args):
         # 需要回放历史时显式 --since 0。
         peek = c.get("/api/usb/transfers?limit=1")
         cursor = int(peek.get("nextId") or 0)
+    if not args.quiet and (args.vid or args.pid):
+        want = _vid_pid_label(args.vid, args.pid)
+        if want and want not in _device_tree_text(c):
+            print(
+                f"提示: 当前抓包里还没有 {want} 的描述符，过滤不会命中。\n"
+                "  设备如果在 capture start 之前就已枚举，抓包里没有它的 GET_DESCRIPTOR；\n"
+                "  先 `omni usb capture stop` 再 `start`，然后重新插拔设备。\n"
+                "  重新插拔后仍没有，说明它挂在另一个 root hub："
+                "capture bind --device USBPcap2 再试。",
+                file=sys.stderr,
+            )
+
     interval = max(0.05, float(args.interval))
     deadline = time.monotonic() + args.duration if args.duration else None
-    printed_header = False
+    follow_layout: tuple[list[str], int, list[int]] | None = None
+    preview_warned = False
     waited_hint = False
     try:
         while True:
@@ -320,17 +619,44 @@ def _capture_transfers(c: ApiClient, args):
                     for item in items:
                         print(json.dumps(item, ensure_ascii=False))
                 else:
-                    if not printed_header and not args.quiet:
+                    if (
+                        args.data_bytes
+                        and not preview_warned
+                        and _missing_preview(items)
+                    ):
                         print(
-                            "     ID  时间         设备  端点  方向  类型          长度  状态      摘要"
+                            "提示: 当前后端未返回 payload 预览，数据列显示为 -"
+                            "（升级 OMNI Bus 后端后可用）",
+                            file=sys.stderr,
                         )
-                        printed_header = True
-                    for item in items:
-                        print(_transfer_line(item))
+                        preview_warned = True
+                    if follow_layout is None:
+                        follow_layout = _follow_layout(
+                            args.data_bytes, _terminal_columns(), args.data_per_line
+                        )
+                        if not args.quiet:
+                            print(
+                                render_table(
+                                    follow_layout[0], [], widths=follow_layout[2]
+                                )
+                            )
+                    headers, per_line, widths = follow_layout
+                    print(
+                        render_table(
+                            headers,
+                            _transfer_rows(items, args.data_bytes, per_line, not args.no_setup),
+                            widths=widths,
+                            show_header=False,
+                        )
+                    )
                 cursor = int(items[-1]["id"])
                 sys.stdout.flush()
             elif not args.json_ and not waited_hint and not args.quiet:
-                print("等待传输…（Ctrl+C 结束）", file=sys.stderr)
+                if getattr(args, "vid", None) or getattr(args, "pid", None):
+                    want = f"{args.vid or '-'}:{args.pid or '-'}"
+                    print(f"等待匹配 {want} 的传输…（Ctrl+C 结束）", file=sys.stderr)
+                else:
+                    print("等待传输…（Ctrl+C 结束）", file=sys.stderr)
                 waited_hint = True
 
             if deadline is not None and time.monotonic() >= deadline:
@@ -1219,29 +1545,173 @@ def _format_device(device: dict) -> list[str]:
     return lines
 
 
-def _winusb_list(c: ApiClient, args):
+def _device_address(value: str) -> int:
+    """传输列表的 ``--device`` 是设备地址，不是 root hub 路径。"""
+    text = str(value).strip()
+    if text.startswith("\\") or "usbpcap" in text.lower():
+        raise argparse.ArgumentTypeError(
+            "这里是设备地址（如 7，表格里 1.7 的后一段），不是 root hub；"
+            "root hub 在 capture start --device '\\\\.\\USBPcap1' 里选"
+        )
+    try:
+        return int(text, 10)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"设备地址应为整数（如 7），收到 {value!r}；表格里 1.7 的 7 就是它"
+        ) from None
+
+
+def _endpoint_address(value: str) -> int:
+    """端点地址，接受 0x81 或 129 两种写法。"""
+    text = str(value).strip()
+    try:
+        return int(text, 16) if text.lower().startswith("0x") else int(text, 10)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"端点地址应为整数或 0x 十六进制（如 0x81 / 129），收到 {value!r}"
+        ) from None
+
+
+def _usb_id_value(value) -> int | None:
+    """把 ``0xC251`` / ``C251`` 这类 VID/PID 写法转成整数。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower().startswith("0x"):
+        text = text[2:]
+    try:
+        return int(text, 16)
+    except ValueError:
+        return None
+
+
+def _all_usb_devices(c: ApiClient, args, *, vid=None, pid=None, driver=None):
+    """列出系统里的 USB 设备（VID/PID、驱动服务、实例 ID）。"""
+    from urllib.parse import quote
+
+    query = "?service=" + quote(driver) if driver else ""
+    data = c.get(f"/api/usb/winusb/all-devices{query}")
+    if not data.get("success", True):
+        return _failure(data, "USB 设备枚举失败")
+
+    devices = data.get("devices") or []
+    want_vid, want_pid = _usb_id_value(vid), _usb_id_value(pid)
+    if want_vid is not None:
+        devices = [item for item in devices if _usb_id_value(item.get("vid")) == want_vid]
+    if want_pid is not None:
+        devices = [item for item in devices if _usb_id_value(item.get("pid")) == want_pid]
+    if driver:
+        devices = [
+            item
+            for item in devices
+            if (item.get("service") or "").lower() == driver.lower()
+        ]
+    payload = dict(data, devices=devices)
+
     if args.all:
-        data = c.get("/api/usb/winusb/all-devices")
-        if not data.get("success", True):
-            return _failure(data, "USB 设备枚举失败")
-        devices = data.get("devices") or []
+        groups = _hub_groups(devices)
         if args.json_:
-            finish(args, data, "")
+            finish(args, {"success": True, "hubs": groups}, "")
             return 0
         if not devices:
-            finish(args, data, "总线上没有 USB 设备。")
+            finish(args, payload, "没有匹配的 USB 设备。")
             return 0
-        rows = [
-            [
-                f"{item.get('vid') or '-'}:{item.get('pid') or '-'}",
-                item.get("description") or "-",
-                item.get("service") or "-",
-                item.get("instanceId") or "-",
-            ]
-            for item in devices
-        ]
-        print_table(["VID:PID", "描述", "驱动服务", "实例 ID"], rows)
+        _print_hub_tree(groups, settings.usb_capture_hub())
         return 0
+
+    if args.json_:
+        finish(args, payload, "")
+        return 0
+    if not devices:
+        finish(args, payload, "没有匹配的 USB 设备。")
+        return 0
+
+    rows = [
+        [
+            f"{item.get('vid') or '-'}:{item.get('pid') or '-'}",
+            item.get("description") or "-",
+            item.get("service") or "-",
+            item.get("hubLabel") or "-",
+        ]
+        for item in devices
+    ]
+    print_table(["VID:PID", "描述", "驱动服务", "所属 hub"], rows)
+    return 0
+
+
+def _hub_groups(devices: list[dict]) -> list[list[dict]]:
+    """按 root hub 分组；USBPcapN 在前，未识别的归到末尾。"""
+    groups: dict[str, dict] = {}
+    for item in devices:
+        label = item.get("hubLabel") or "未知 hub"
+        group = groups.setdefault(
+            label,
+            {
+                "label": label,
+                "device": item.get("hubDevice"),
+                "controller": item.get("hubController"),
+                "controllerId": item.get("hubControllerId"),
+                "devices": [],
+            },
+        )
+        group["devices"].append(item)
+
+    def sort_key(group: dict):
+        label = group["label"]
+        if label.startswith("USBPcap") and label[7:].isdigit():
+            return (0, int(label[7:]))
+        return (1, 0)
+
+    return sorted(groups.values(), key=sort_key)
+
+
+def _print_hub_tree(groups: list[dict], bound: str | None) -> None:
+    """树形展示：USB → USBPcapN（root hub）→ 设备。"""
+    lines = ["USB"]
+    if not groups:
+        lines.append("└── 没有匹配的设备")
+        print("\n".join(lines))
+        return
+
+    for group_index, group in enumerate(groups):
+        group_last = group_index == len(groups) - 1
+        head = group["label"]
+        if group.get("controller"):
+            head += "  " + group["controller"]
+            if group.get("controllerId"):
+                head += f" ({group['controllerId']})"
+        if group.get("device"):
+            head += "  " + group["device"]
+        if bound and group.get("device") == bound:
+            head += "  [已绑定]"
+        lines.append(("└── " if group_last else "├── ") + head)
+
+        child_prefix = "    " if group_last else "│   "
+        devices = group["devices"]
+        if not devices:
+            lines.append(child_prefix + "└── 没有设备")
+            continue
+        for device_index, item in enumerate(devices):
+            device_last = device_index == len(devices) - 1
+            vid = f"{item.get('vid') or '-'}:{item.get('pid') or '-'}"
+            lines.append(
+                child_prefix
+                + ("└── " if device_last else "├── ")
+                + f"{vid}  {item.get('description') or '-'}  "
+                + f"{item.get('service') or '-'}"
+            )
+    print("\n".join(lines))
+
+
+def _usb_list(c: ApiClient, args):
+    return _all_usb_devices(c, args, vid=args.vid, pid=args.pid, driver=args.driver)
+
+
+def _winusb_list(c: ApiClient, args):
+    if args.all:
+        return _all_usb_devices(c, args)
 
     data = _winusb_devices(c, args.guid)
     if not data.get("success", True):
@@ -1605,6 +2075,7 @@ def add_parser(sub):
         epilog=(
             "Examples:\n"
             "  omni usb doctor\n"
+            "  omni usb list\n"
             "  omni usb capture start --devices 1,2\n"
             "  omni usb capture transfers --follow\n"
             "  omni usb capture open --pcap sess.pcap --json\n"
@@ -1624,6 +2095,14 @@ def add_parser(sub):
     # ── 环境诊断 ──────────────────────────────────────────
     s = ps.add_parser("doctor", parents=[common_parser()], help="环境诊断（USBPcap / 管理员 / WinUSB）")
     s.set_defaults(func=run_command(_doctor))
+
+    # ── 设备列表 ──────────────────────────────────────────
+    s = ps.add_parser("list", parents=[common_parser()], help="列出系统 USB 设备（VID/PID、驱动、实例 ID）")
+    s.add_argument("--vid", help="按 VID 过滤，如 0xC251")
+    s.add_argument("--pid", help="按 PID 过滤，如 0x0002")
+    s.add_argument("--driver", help="按驱动服务过滤，如 WINUSB / usbser / HidUsb")
+    s.add_argument("--all", action="store_true", help="按 root hub 分组显示所有设备（树形）")
+    s.set_defaults(func=run_command(_usb_list))
 
     # ── 描述符（M2） ──────────────────────────────────────
     d = ps.add_parser("desc", help="描述符解析 / 校验 / 生成 / 模板")
@@ -1669,11 +2148,15 @@ def add_parser(sub):
     c = ps.add_parser("capture", help="USBPcap 实时抓包 / 离线解析")
     cs = c.add_subparsers(dest="usb_capture_sub", metavar="<sub>")
 
-    s = cs.add_parser("doctor", parents=[common_parser()], help="USBPcap 安装 / 权限 / root hub 诊断")
-    s.set_defaults(func=run_command(_doctor))
+    s = cs.add_parser("bind", parents=[common_parser()], help="绑定默认 root hub（之后 start 不用 --device）")
+    s.add_argument("--device", help="root hub，如 USBPcap1（省略时自动选择唯一的一个）")
+    s.set_defaults(func=run_command(_capture_bind))
+
+    s = cs.add_parser("unbind", parents=[common_parser()], help="取消 root hub 绑定")
+    s.set_defaults(func=run_command(_capture_unbind))
 
     s = cs.add_parser("start", parents=[common_parser()], help="开始抓包（需要管理员）")
-    s.add_argument("--device", help="root hub，如 \\\\.\\USBPcap1（唯一时自动选择）")
+    s.add_argument("--device", help="root hub，如 \\\\.\\USBPcap1（省略时用 capture bind 的绑定，或唯一时自动选择）")
     s.add_argument("--snaplen", type=int, help="快照长度（默认由后端决定）")
     s.add_argument("--bufferlen", type=int, help="USBPcap 内部缓冲（4096..134217728）")
     s.add_argument("--devices", help="只抓指定设备地址，如 1,2,3")
@@ -1694,11 +2177,38 @@ def add_parser(sub):
     s.add_argument("--duration", type=float, default=0.0, help="follow 持续秒数（默认 0=一直）")
     s.add_argument("--type", help="control,bulk,interrupt,isochronous")
     s.add_argument("--dir", choices=("in", "out"))
-    s.add_argument("--bus", type=int)
-    s.add_argument("--device", type=int)
-    s.add_argument("--endpoint", type=int)
+    s.add_argument("--bus", type=int, help="总线号（表格里 1.7 的 1）")
+    s.add_argument(
+        "--device",
+        type=_device_address,
+        metavar="ADDR",
+        help="设备地址（表格里 1.7 的 7；root hub 在 capture start 时选）",
+    )
+    s.add_argument("--endpoint", type=_endpoint_address, help="端点地址，如 0x81")
     s.add_argument("--status", help="ok / error")
+    s.add_argument("--vid", help="按设备 VID 过滤，如 0xC251（用抓包里的设备描述符）")
+    s.add_argument("--pid", help="按设备 PID 过滤，如 0x0002")
     s.add_argument("--q", help="摘要/设备号文本搜索")
+    s.add_argument(
+        "--data-bytes",
+        type=int,
+        default=64,
+        metavar="N",
+        help="数据列显示的字节数（默认 64，0=不显示；超出部分用 … 标注）",
+    )
+    s.add_argument(
+        "--no-setup",
+        action="store_true",
+        help="不拆出 CTL(SETUP) 行，控制传输只显示数据阶段",
+    )
+    s.add_argument(
+        "--data-per-line",
+        type=int,
+        choices=(4, 8, 16),
+        default=8,
+        metavar="N",
+        help="数据列每行字节数（默认 8；窗口过窄时自动降到 4）",
+    )
     s.set_defaults(func=run_command(_capture_transfers))
 
     s = cs.add_parser("detail", parents=[common_parser()], help="单条传输详情")
@@ -1717,18 +2227,13 @@ def add_parser(sub):
     s.add_argument("--out", required=True, metavar="FILE")
     s.set_defaults(func=run_command(_capture_save))
 
-    s = cs.add_parser("replay", parents=[common_parser()], help="在真实设备上重放抓包中的一条传输")
-    s.add_argument("transfer_id", type=int, help="传输 ID")
-    s.add_argument("--id", dest="session", default="cli", metavar="ID", help="目标会话（默认 cli）")
-    s.set_defaults(func=_todo("replay"))
-
     # ── WinUSB（控制/批量/中断 + echo） ──────────────────
     w = ps.add_parser("winusb", help="WinUSB 控制/批量/中断传输（设备需绑定 WinUSB）")
     ws = w.add_subparsers(dest="usb_winusb_sub", metavar="<sub>")
 
     s = ws.add_parser("list", parents=[common_parser()], help="列出 WinUSB 接口（--all 含全部 USB 设备）")
     s.add_argument("--guid", action="append", metavar="GUID", help="设备接口 GUID（可重复）")
-    s.add_argument("--all", action="store_true", help="列出所有 USB 设备及驱动服务名（分诊用）")
+    s.add_argument("--all", action="store_true", help="列出所有 USB 设备及驱动服务名（等价 omni usb list）")
     s.set_defaults(func=run_command(_winusb_list))
 
     s = ws.add_parser("info", parents=[common_parser()], help="设备/接口/端点详情")

@@ -200,15 +200,35 @@ def _config_key(svc: ServiceInfo) -> str:
     return "backend_dir" if svc.name == SERVICE_LINK else f"{svc.name}_backend_dir"
 
 
+def _write_cli_config(data: dict) -> None:
+    os.makedirs(os.path.dirname(CLI_CONFIG_FILE), exist_ok=True)
+    with open(CLI_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def save_backend_dir(path: str, service_name: Optional[str] = None) -> str:
     """记录后端目录到持久化配置，返回写入的绝对路径。"""
     svc = service(service_name)
     data = _read_cli_config()
     data[_config_key(svc)] = os.path.abspath(path)
-    os.makedirs(os.path.dirname(CLI_CONFIG_FILE), exist_ok=True)
-    with open(CLI_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _write_cli_config(data)
     return data[_config_key(svc)]
+
+
+def usb_capture_hub() -> Optional[str]:
+    """`omni usb capture bind` 绑定的默认 root hub（未绑定返回 None）。"""
+    return _read_cli_config().get("usb_capture_hub") or None
+
+
+def set_usb_capture_hub(hub: Optional[str]) -> Optional[str]:
+    """绑定/解绑默认 root hub（传 None 解绑），返回当前绑定值。"""
+    data = _read_cli_config()
+    if hub:
+        data["usb_capture_hub"] = hub
+    else:
+        data.pop("usb_capture_hub", None)
+    _write_cli_config(data)
+    return hub
 
 
 def _env_server_var(svc: ServiceInfo) -> str:

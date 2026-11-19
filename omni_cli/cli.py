@@ -202,6 +202,39 @@ def _format_api_error(e: client.ApiError) -> str:
     return str(e.detail)
 
 
+class _SubcommandHelpFormatter(argparse.HelpFormatter):
+    """修正子命令帮助列少算 2 列的问题。
+
+    argparse 在登记子命令时按章节缩进（2 列）计算 ``_action_max_length``，真正排版时
+    子命令缩进是 4 列，于是最长的命令名（如 ``transfers``）会被挤到下一行。这里补回来。
+    """
+
+    def add_argument(self, action):
+        super().add_argument(action)
+        if isinstance(action, argparse._SubParsersAction):
+            self._action_max_length += 2
+
+
+class _SubcommandRawHelpFormatter(
+    _SubcommandHelpFormatter, argparse.RawDescriptionHelpFormatter
+):
+    """保留示例块逐行排版（RawDescription）的同时修正子命令列宽。"""
+
+
+def _use_subcommand_formatter(parser: argparse.ArgumentParser) -> None:
+    current = parser.formatter_class
+    if isinstance(current, type) and issubclass(
+        current, argparse.RawDescriptionHelpFormatter
+    ):
+        parser.formatter_class = _SubcommandRawHelpFormatter
+    else:
+        parser.formatter_class = _SubcommandHelpFormatter
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for child in action.choices.values():
+                _use_subcommand_formatter(child)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _CategorizedHelpParser(
         prog=PROG,
@@ -212,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="<command>",
                                 parser_class=argparse.ArgumentParser)
     commands.add_all_parsers(sub)
+    _use_subcommand_formatter(parser)
     return parser
 
 

@@ -1,6 +1,6 @@
 ---
 name: "omni-cli"
-description: "用 omni CLI（omni-cli 0.28.1+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
+description: "用 omni CLI（omni-cli 0.39.0+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
 ---
 
 # OMNI CLI 实机联调
@@ -23,7 +23,7 @@ description: "用 omni CLI（omni-cli 0.28.1+）在真实硬件上联调：经�
 
 | 项 | 本机实测值 |
 |----|-----------|
-| CLI | `omni 0.28.1`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
+| CLI | `omni 0.39.0`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
 | 安装位置 | wheel：`powershell -File scripts\cli-package.ps1`（在 omni-cli 仓）；源码态用 `python -m omni_cli`（`PYTHONPATH` 指向 omni-cli 仓） |
 | 后端 | 独立仓库 `D:\workspace\embedded\omni-backend`，两个服务：`link`（探针/烧录/RTT/调试）与 `bus`（串口/网络/USB）；源码态 `link/server.py`、`bus/server.py` |
 | 后端接入 | 常驻 `omni backend start [link\|bus]` / `--managed`（临时拉起）/ `--backend-port`（接管已有） |
@@ -47,6 +47,38 @@ omni toolchain          # cmake/ninja/编译器最终解析来源
 > [!IMPORTANT]
 > `--jlink-device` 是 **SEGGER 数据库里的设备名**，和 CMSIS-Pack 的型号字符串不一定相同（本机 STM32F407 恰好同名，换芯片时用 `omni probe jlink-devices --search <前缀>` 查）。
 > `probe connect` 的 `--target` 是必填项（调试/烧录的芯片型号），与本地命令 `-b/--board`（构建目标板）不是一回事。
+
+## 开发循环（改 CLI / 后端时）
+
+调试阶段**不要**打包安装，两边都走源码：
+
+```powershell
+# 管理员 PowerShell，omni-cli 仓库根
+.\scripts\dev-bus.ps1          # 停掉现有后端，改用 omni-backend/bus/server.py
+python -m omni_cli usb capture bind --device USBPcap1
+python -m omni_cli usb capture transfers --follow
+```
+
+装好 CLI 后，开始菜单的「OMNI CLI Shell」就是终端入口（等价 ESP-IDF Command Prompt）：
+打开即是一个已配置好 PATH 的终端，`omni` 直接可用；USB 抓包右键该快捷方式选
+「以管理员身份运行」。它会优先在 Windows Terminal 里打开——conhost 的滚动历史会被新输出
+顶走，WT 不会，`--follow` 时往上翻才看得住；想留在当前控制台加 `-NoTerminal`。
+源码调试时也可以直接 `powershell -NoExit -File scripts\omni-shell.ps1`
+（此时 `omni` 指向 `python -m omni_cli`）。
+
+| 改了什么 | 怎么生效 |
+|---|---|
+| CLI（`omni_cli/**`） | 重跑 `python -m omni_cli ...`，无需重启 |
+| 后端（`omni-backend/bus/**`） | 重跑 `.\scripts\dev-bus.ps1`（约 2 秒，会中断当前抓包） |
+
+- 只有发版、验证 frozen 产物、或给 OMNI Bus GUI 用时，才需要 `build.ps1` / `bus/build.py`。
+- 安装版 `omni.exe` 是 frozen 的，只会复用安装目录里的后端；源码后端只在
+  `python -m omni_cli` 下才会被探测到。两者共用 `%LOCALAPPDATA%\omni-bus\backend.json`，
+  **谁先启动谁被复用**——GUI 先开会把它自带的 0.2.0 后端拉起来。
+- 安装版装在非默认盘符时：`$env:OMNI_BUS_HOME = "D:\Program Files\OMNI Bus"`（CLI 会去
+  `resources\python\omni-bus-backend.exe` 找后端；新版也会从注册表反查安装位置）。
+- 想用打包好的后端但不想安装：`$env:OMNI_BUS_BACKEND_EXE = "D:\...\omni-bus-backend.exe"`，
+  它优先于安装目录里的 exe。
 
 ## 最小闭环
 
@@ -88,7 +120,7 @@ omni build -b stm32f407ig --project-dir examples\basic\template -t flash
 | Monitor | `monitor status\|elf load\|symbols\|var add\|start\|read\|export` |
 | 串口（bus） | `serial ports\|open\|close\|status\|send\|read\|update`、`serial record start\|stop\|status`、`serial auto-send start\|stop\|update` |
 | 网络（bus） | `net interfaces\|ping`、`net tcp-server start\|stop\|status\|send\|kick\|echo\|auto-send`、`net tcp-client connect\|disconnect\|status\|send\|auto-send`、`net udp start\|stop\|status\|send\|echo\|auto-send`、`net read`、`net tftp server-start\|server-stop\|server-status\|server-files\|get\|put` |
-| USB（bus） | `usb doctor`、`usb capture start\|stop\|status\|transfers\|detail\|devices\|open\|save`、`usb desc parse\|validate\|build\|emit\|template\|from-capture`、`usb winusb list\|info\|open\|control\|read\|write\|pipe\|echo\|close`、`usb hid list\|open\|read\|write\|feature\|close`、`usb cdc list\|open\|send\|read\|break\|close`、`usb test run\|list` |
+| USB（bus） | `usb doctor`、`usb list`、`usb capture start\|stop\|status\|transfers\|detail\|devices\|open\|save`、`usb desc parse\|validate\|build\|emit\|template\|from-capture`、`usb winusb list\|info\|open\|control\|read\|write\|pipe\|echo\|close`、`usb hid list\|open\|read\|write\|feature\|close`、`usb cdc list\|open\|send\|read\|break\|close`、`usb test run\|list` |
 | 文件（后端解析） | `file info <bin/hex/elf>` |
 
 **本地类（不需要后端、不需要探针）**：
@@ -202,7 +234,11 @@ omni serial auto-send stop --id cdc
 
 ## USB（bus 服务）
 
-抓包、描述符、请求、回归测试都在 `omni usb` 下。**发请求有三条通道，能力不同**：
+抓包、描述符、请求、回归测试都在 `omni usb` 下。先看系统里有什么设备用 `omni usb list`
+（VID/PID、驱动服务、**所属 hub**；`--vid/--pid/--driver` 过滤）。`omni usb list --all` 按
+root hub 分组树形展示（`├──` 连接线，控制器名 + `USBPcapN` + 当前绑定标记），**bind 前用它确认设备挂在
+哪颗 hub 上**；抓包期间枚举到的设备树用 `omni usb capture devices`。**发请求有三条通道，
+能力不同**：
 
 | 通道 | 设备条件 | 能做什么 | 不能做什么 |
 |---|---|---|---|
@@ -213,14 +249,51 @@ omni serial auto-send stop --id cdc
 ### 抓包（USBPcap）
 
 ```powershell
-omni usb doctor                                  # 安装/权限/可抓 root hub
-omni usb capture start --devices 1,2             # 管理员；建议先 start 再插拔设备
-omni usb capture transfers --follow              # 实时看 URB（Ctrl+C 结束）
+omni usb doctor                                  # 环境诊断（USBPcap / 管理员 / WinUSB）
+omni usb capture bind --device USBPcap1          # 绑定默认 root hub（之后 start 不用 --device）
+omni usb capture unbind                          # 取消绑定
+omni usb capture start --device '\\.\USBPcap1'   # 管理员；多 root hub 时必须指定
+omni usb capture transfers                       # URB 列表，带「数据」列（8 字节/行）
+omni usb capture transfers --follow              # 实时滚动（Ctrl+C 结束）
+omni usb capture transfers --data-per-line 16    # 宽终端可放宽到 16 字节/行
+omni usb capture transfers --data-bytes 0        # 隐藏数据列（窄终端）
 omni usb capture detail 37                       # SETUP / hex / 解码树
 omni usb capture devices                         # 从描述符重建的设备树
 omni usb capture open --pcap customer.pcap       # 离线分析，不需要 USBPcap/管理员
 omni usb capture save --out session.pcap
 ```
+
+要点：
+
+- `--device` 写 `USBPcap1` 或 `\\.\USBPcap1` 都行（CLI 会补全成设备路径）；`doctor` 打印的
+  就是设备路径，可直接复制。root hub 优先级：显式 `--device` > `capture bind` 的绑定 >
+  只有一个时自动选择；多个又没绑定会报错并列出可选值。
+- 表格按 Bus Hound 的 **Phase** 组织：控制传输拆成 `CTL`（SETUP 八字节）和 `IN`/`OUT`
+  （数据阶段）两行，批量/中断只有一行；`--no-setup` 可只保留数据阶段。
+- 「描述」列：控制传输给请求名（如 `GET_DESCRIPTOR(DEVICE)`、`SET_CONFIGURATION(1)`），
+  批量/中断只保留 MSC/CDC 这类型级解码，`BULK IN 18B` 这类噪音不再显示；
+  完整解码（bmRequestType/bRequest/...）用 `detail`。
+- 「数据」列显示 payload 的 hex，默认每行 8 字节（`--data-per-line 4|8|16`），窗口过窄时
+  自动降到 4 字节，超长部分标 `…`；
+  `--data-bytes N` 控制显示字节数（默认 64，0=隐藏）。列表里的数据是后端预览（前 64 字节），
+  完整内容用 `detail`；零长度传输显示 `-`。
+- **管理员是后端进程的属性**：权限检查在后端里，从普通终端启动的常驻后端即使客户端提权
+  也会报 `not_elevated`。必须由管理员终端执行 `omni backend start bus`。
+- 列表接口不返回 `dataHex` 的旧后端，数据列显示 `-` 并在 stderr 提示升级后端。
+- 总线状态：USBPcap 只抓 URB，**suspend/resume 不是 URB、抓不到**；reset 可看 hub 的
+  `SET_FEATURE(PORT_RESET, port N)`，或 `URB` 行里的 `RESET_PIPE` /
+  `SYNC_RESET_PIPE_AND_CLEAR_STALL` / `ABORT_PIPE`。`URB` 行的 Function 名已解码
+  （如 Windows 枚举时的 `GET_MS_FEATURE_DESCRIPTOR`）。
+- 状态列常见 `CANCELED` / `DEV_NOT_RESPONDING` / `DEVICE_GONE` / `INVALID_PARAMETER`：
+  多是设备拔插或复位后栈在拆管道，`长度` 是 URB 请求长度（如 16384），数据可能是残留缓冲。
+- 复合设备（`0xEF/0x02`）的控制请求按接口类补全解码：RNDIS（`0xEF/0x04`）的
+  `SEND_ENCAPSULATED_COMMAND` / `GET_ENCAPSULATED_RESPONSE`、CDC/HID/MSC 都能显示请求名。
+- `--follow` 默认只跟**新**传输；看历史用 `transfers`，或 `--follow --since 0`。
+- 视图按设备过滤：`--device 7`（USB 地址）或 `--vid 0xC251 --pid 0x0005`（用抓包里的
+  设备描述符映射到地址）。USBPcap 本身只支持 root hub + 地址过滤，没有 VID/PID 维度；
+  VID/PID 过滤要求抓包时抓到该设备的 GET_DESCRIPTOR（先 start 再插拔）；抓包里没有时
+  `--follow` 会在启动时立即提示（不会静默等待），重新插拔仍没有就换另一个 root hub。
+- `--follow` 直接在终端里滚动查看历史；想不被打断，用 Windows Terminal（见下文终端入口）。
 
 ### 描述符
 

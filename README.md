@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.28.1**（CLI 呈现统一）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.39.0**（USB 抓包数据列 / 滚动暂停 / 终端入口）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 
@@ -157,6 +157,9 @@ OMNI Link / OMNI Bus **不再内置** CLI：安装包只带各自后端，`omni`
 
 - 按用户安装到 `%LOCALAPPDATA%\Programs\OMNI CLI\bin`，无需管理员；
 - 自动把该目录加入用户 PATH，卸载时移除；
+- 在开始菜单创建「OMNI CLI Shell」：打开即是一个已配置好 `omni` 的终端（类似 ESP-IDF
+  Command Prompt），优先在 Windows Terminal 中打开（滚动历史不会被打断），USB 抓包右键
+  该快捷方式选「以管理员身份运行」；
 - 在「应用和功能」里注册卸载项，支持静默安装/卸载（`/S`）；
 - `makensis` 找不到时自动使用 electron-builder 缓存，也可用 `-NsisPath` 指定。
 
@@ -989,6 +992,7 @@ python scripts\build-exe.ps1      # 构建单文件 exe（内含源码编码检�
 
 | 变量 | 说明 |
 | --- | --- |
+| `OMNI_LINK_HOME` / `OMNI_BUS_HOME` | GUI 安装根目录（其下含 `resources\python`）。装在非默认盘符或便携目录时用于定位内置后端 |
 | `OMNI_BACKEND_DIR` | 后端根目录（含 `server.py`）。wheel 安装后用于定位后端 |
 | `OMNI_BACKEND_SERVER` | 直接指定 `server.py` 路径，优先级最高 |
 | `OMNI_BACKEND_PORT` | 后端端口覆盖（与 Electron 主进程一致） |
@@ -998,7 +1002,11 @@ python scripts\build-exe.ps1      # 构建单文件 exe（内含源码编码检�
 | `OMNI_CLI` | `omni_config.py` 启动器查找的 `omni` 可执行文件/目录 |
 | `OMNI_PROJECT_SKIP_VERSION_CHECK` | 设为 `1` 时启动器跳过版本检查 |
 
-`server.py` 定位优先级：`OMNI_BACKEND_SERVER` → `OMNI_BACKEND_DIR` → 用户级 `cli.config.json`（`cli-package.ps1` / `save_backend_dir` 写入）→ 仓库布局探测（含 submodule 布局）。
+`server.py` 定位优先级：`OMNI_BACKEND_SERVER` → `OMNI_BACKEND_DIR` → 用户级 `cli.config.json`（`cli-package.ps1` / `save_backend_dir` 写入）→ 仓库布局探测（含 submodule 布局）→ 已安装 GUI 的内置后端（含注册表反查）。
+
+已安装 GUI 的查找不依赖盘符：未设 `OMNI_*_HOME` 时，CLI 还会从注册表 `Uninstall` 键的
+`InstallLocation` / `DisplayIcon` / `UninstallString` 反推安装根目录，因此装到
+`D:\Program Files\OMNI Bus` 这类非默认路径也能自动复用其内置后端。
 
 ## 运行时文件
 

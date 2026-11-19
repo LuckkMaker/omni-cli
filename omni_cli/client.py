@@ -246,11 +246,17 @@ def _backend_command(service_name: str = settings.DEFAULT_SERVICE) -> list[str]:
             return [exe, "--port", "0"]
 
     # 源码态下 server.py 不存在但打包产物在（常见于只装了 GUI 的机器）
+    from . import autoinstall  # 局部导入避免循环依赖
+
+    home_var = autoinstall.home_env_var(svc.name)
+    gui_name = "Link" if svc.name == settings.SERVICE_LINK else "Bus"
     raise ApiError(
         0,
-        f"未找到 {svc.name} 后端（server.py: {server_py}）\n"
-        f"  安装 OMNI {'Link' if svc.name == settings.SERVICE_LINK else 'Bus'} 后会自动复用其内置后端；"
-        f"也可以设置 {svc.state_env} 指向后端状态目录，或先手动启动后端并用 --backend-port 指定端口。",
+        f"未找到 {svc.name} 后端可执行文件（server.py: {server_py}）\n"
+        f"  已安装的 OMNI {gui_name} 会被自动复用；装在其他盘符或便携目录时，"
+        f"设置 {home_var} 指向安装根目录（其下应有 resources\\python）。\n"
+        + autoinstall.describe_search(svc.name)
+        + "\n  也可以先手动启动后端，再用 --backend-port 指定端口。",
         kind="error",
     )
 

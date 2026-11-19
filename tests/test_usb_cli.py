@@ -24,7 +24,7 @@ from pathlib import Path
 PY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PY_DIR)
 
-from omni_cli import cli, runtime  # noqa: E402
+from omni_cli import cli, runtime, settings  # noqa: E402
 from omni_cli.commands import usb as usb_cmd  # noqa: E402
 
 failures: list[str] = []
@@ -60,6 +60,10 @@ def ns(**kw) -> argparse.Namespace:
         since=None,
         follow=False,
         limit=200,
+        data_bytes=64,
+        data_per_line=8,
+        no_setup=False,
+        driver=None,
         type=None,
         dir=None,
         bus=None,
@@ -186,11 +190,37 @@ def capture(func, client, args) -> tuple[int, str, str]:
 
 
 def main() -> int:
+    # 配置写到临时目录，避免污染用户真实的 cli.config.json
+    settings.CLI_CONFIG_FILE = os.path.join(
+        tempfile.mkdtemp(prefix="omni-usb-test-"), "cli.config.json"
+    )
+
     # ── 1. 命令面 ────────────────────────────────────────
     code, out, _ = run_cli(["usb", "--help"])
     check("usb --help 退出码 0", code == 0, str(code))
-    for sub in ("doctor", "desc", "winusb", "hid", "cdc", "capture", "test"):
+    for sub in ("doctor", "list", "desc", "winusb", "hid", "cdc", "capture", "test"):
         check(f"usb --help 含 {sub}", sub in out)
+
+    code, _, err = run_cli(
+        ["usb", "capture", "transfers", "--device", "\\\\.\\USBPcap1"]
+    )
+    check(
+        "transfers --device 传 root hub 时给设备地址提示",
+        code == 2 and "设备地址" in err,
+        err,
+    )
+
+    code, _, err = run_cli(["usb", "capture", "replay", "1"])
+    check("capture replay 已移除", code == 2 and "invalid choice" in err, err)
+
+    code, out, _ = run_cli(["usb", "capture", "--help"])
+    check("capture --help 退出码 0", code == 0, str(code))
+    transfer_lines = [line for line in out.splitlines() if "transfers" in line]
+    check(
+        "capture --help 最长子命令不折行",
+        any("查询传输" in line for line in transfer_lines),
+        out,
+    )
 
     code, out, _ = run_cli([])
     check("omni 无子命令返回 2", code == 2, str(code))
@@ -776,6 +806,77 @@ def main() -> int:
         err,
     )
 
+    all_devices = {
+        "success": True,
+        "devices": [
+            {
+                "vid": "0xC251",
+                "pid": "0x0005",
+                "description": "USB Composite Device",
+                "service": "usbccgp",
+                "instanceId": "USB\\VID_C251&PID_0005\\X",
+            },
+            {
+                "vid": "0x05E3",
+                "pid": "0x0626",
+                "description": "Hub",
+                "service": "USBHUB3",
+                "instanceId": "USB\\VID_05E3&PID_0626\\Y",
+            },
+        ],
+    }
+    client = StubClient({"/api/usb/winusb/all-devices": all_devices})
+    code, out, _ = capture(usb_cmd._usb_list, client, ns())
+    check("usb list 列出全部设备", code == 0 and "0xC251" in out and "0x05E3" in out, out)
+
+    hub_devices = {
+        "success": True,
+        "devices": [
+            {
+                "vid": "0xC251",
+                "pid": "0x0005",
+                "description": "Board",
+                "service": "usbccgp",
+                "hubLabel": "USBPcap2",
+                "hubDevice": "\\\\.\\USBPcap2",
+                "hubController": "xHCI",
+                "hubControllerId": "8086:51ED",
+            },
+            {
+                "vid": "0x05E3",
+                "pid": "0x0626",
+                "description": "Hub",
+                "service": "USBHUB3",
+                "hubLabel": "USBPcap1",
+                "hubDevice": "\\\\.\\USBPcap1",
+                "hubController": "xHCI",
+                "hubControllerId": "8086:A71E",
+            },
+        ],
+    }
+    client = StubClient({"/api/usb/winusb/all-devices": hub_devices})
+    code, out, _ = capture(usb_cmd._usb_list, client, ns())
+    check("usb list 显示所属 hub", code == 0 and "USBPcap2" in out, out)
+
+    client = StubClient({"/api/usb/winusb/all-devices": hub_devices})
+    code, out, _ = capture(usb_cmd._usb_list, client, ns(all=True))
+    check(
+        "usb list --all 按 hub 分组",
+        code == 0
+        and out.index("USBPcap1") < out.index("USBPcap2")
+        and "0xC251:0x0005" in out,
+        out,
+    )
+    check("usb list --all 树形连接线", "├──" in out or "└──" in out, out)
+
+    client = StubClient({"/api/usb/winusb/all-devices": all_devices})
+    code, out, _ = capture(usb_cmd._usb_list, client, ns(vid="C251"))
+    check("usb list --vid 过滤", code == 0 and "0xC251" in out and "0x05E3" not in out, out)
+
+    client = StubClient({"/api/usb/winusb/all-devices": all_devices})
+    code, out, _ = capture(usb_cmd._usb_list, client, ns(driver="usbccgp"))
+    check("usb list --driver 过滤", code == 0 and "usbccgp" in out and "USBHUB3" not in out, out)
+
     # ── 3. doctor（M1） ──────────────────────────────────
     code, out, _ = capture(
         usb_cmd._doctor, StubClient({"/api/usb/environment": ENV_OK}), ns()
@@ -783,6 +884,7 @@ def main() -> int:
     check("doctor 已安装退出码 0", code == 0, str(code))
     check("doctor 显示路径", "USBPcapCMD.exe" in out)
     check("doctor 显示管理员状态", "管理员" in out)
+    check("doctor 打印设备路径", r"\\.\USBPcap1" in out, out)
 
     env_missing = dict(ENV_OK, installed=False, path=None, devices=[])
     code, out, _ = capture(
@@ -810,6 +912,20 @@ def main() -> int:
     client = StubClient(
         {
             "/api/usb/environment": ENV_MULTI,
+            "/api/usb/capture/start": {"success": True, "capturePath": "C:/tmp/usb-1.pcap"},
+        }
+    )
+    code, out, _ = capture(usb_cmd._capture_start, client, ns(device="USBPcap2"))
+    payload = [call for call in client.calls if call[0] == "POST"][0][2]
+    check(
+        "start 短名补成设备路径",
+        code == 0 and payload.get("device_id") == r"\\.\USBPcap2",
+        str(payload),
+    )
+
+    client = StubClient(
+        {
+            "/api/usb/environment": ENV_MULTI,
             "/api/usb/capture/start": {
                 "success": False,
                 "code": "not_elevated",
@@ -819,6 +935,71 @@ def main() -> int:
     )
     code, _, err = capture(usb_cmd._capture_start, client, ns(device=r"\\.\USBPcap2"))
     check("start 失败给可执行提示", code == 1 and "管理员" in err, err)
+
+    # ── 4b. capture bind / unbind ────────────────────────
+    client = StubClient({"/api/usb/environment": ENV_OK})
+    code, out, _ = capture(usb_cmd._capture_bind, client, ns())
+    check(
+        "bind 自动绑定唯一 hub",
+        code == 0 and settings.usb_capture_hub() == r"\\.\USBPcap1",
+        out,
+    )
+
+    client = StubClient(
+        {
+            "/api/usb/environment": ENV_MULTI,
+            "/api/usb/capture/start": {"success": True, "capturePath": "C:/tmp/x.pcap"},
+        }
+    )
+    code, out, _ = capture(usb_cmd._capture_start, client, ns())
+    payload = [call for call in client.calls if call[0] == "POST"][0][2]
+    check(
+        "start 省略 --device 时用绑定的 hub",
+        code == 0 and payload.get("device_id") == r"\\.\USBPcap1",
+        str(payload),
+    )
+
+    code, out, _ = capture(usb_cmd._capture_unbind, StubClient({}), ns())
+    check(
+        "unbind 清除绑定",
+        code == 0 and settings.usb_capture_hub() is None,
+        out,
+    )
+
+    client = StubClient(
+        {
+            "/api/usb/devices": {"tree": []},
+            "/api/usb/transfers": {"items": [], "nextId": 5},
+        }
+    )
+    code, _, err = capture(
+        usb_cmd._capture_transfers,
+        client,
+        ns(follow=True, duration=0.1, interval=0.05, vid="0xC251", pid="0x0005"),
+    )
+    check(
+        "follow 无描述符时提示重新抓包",
+        code == 0 and "描述符" in err,
+        err,
+    )
+
+    tree = [{"title": "0xC251:0x0005 设备 003", "fields": []}]
+    client = StubClient(
+        {
+            "/api/usb/devices": {"tree": tree},
+            "/api/usb/transfers": {"items": [], "nextId": 5},
+        }
+    )
+    code, _, err = capture(
+        usb_cmd._capture_transfers,
+        client,
+        ns(follow=True, duration=0.1, interval=0.05, vid="0xC251", pid="0x0005"),
+    )
+    check(
+        "follow 有描述符时不提示",
+        code == 0 and "描述符" not in err,
+        err,
+    )
 
     # ── 5. status / transfers / detail / save ────────────
     status = {
@@ -852,6 +1033,8 @@ def main() -> int:
                 "statusName": "SUCCESS",
                 "ok": True,
                 "summary": "BULK IN 5B",
+                "dataHex": "41 54 0D 0A 68 65 6C 6C 6F",
+                "dataTruncated": False,
             }
         ],
         "nextId": 8,
@@ -862,7 +1045,84 @@ def main() -> int:
         usb_cmd._capture_transfers, StubClient({"/api/usb/transfers": transfer}), ns()
     )
     check("transfers 退出码 0", code == 0, str(code))
-    check("transfers 表格含 ID 与摘要", "7" in out and "BULK IN 5B" in out, out)
+    check("transfers 表格含 ID 与数据", "7" in out and "41 54 0D 0A" in out, out)
+    check("transfers 表格含数据列", "数据" in out and "41 54 0D 0A" in out, out)
+    wrapped = usb_cmd._data_text({"dataHex": " ".join(f"{i:02X}" for i in range(20))}, 64)
+    check(
+        "数据列默认 8 字节换行",
+        wrapped.count("\n") == 2 and wrapped.splitlines()[0].count(" ") == 7,
+        wrapped,
+    )
+    wide_line = usb_cmd._data_text(
+        {"dataHex": " ".join(f"{i:02X}" for i in range(20))}, 64, 16
+    )
+    check("数据列可指定 16 字节换行", wide_line.splitlines()[0].count(" ") == 15, wide_line)
+    def filtered_only(path: str):
+        if "limit=1" in path:
+            return {"items": [], "nextId": 5, "total": 42}
+        return {"items": [], "nextId": 5, "total": 0}
+
+    client = StubClient({"/api/usb/transfers": filtered_only})
+    code, out, _ = capture(usb_cmd._capture_transfers, client, ns(vid="0xC251"))
+    check(
+        "VID 过滤无命中时提示描述符",
+        code == 0 and "描述符" in out,
+        out,
+    )
+
+    client = StubClient({"/api/usb/transfers": transfer})
+    code, _, _ = capture(
+        usb_cmd._capture_transfers, client, ns(vid="0xC251", pid="0x0005")
+    )
+    query = [call[1] for call in client.calls if call[0] == "GET"][0]
+    check(
+        "transfers 传递 VID/PID 过滤",
+        code == 0 and "vid=0xC251" in query and "pid=0x0005" in query,
+        query,
+    )
+
+    wide = dict(
+        transfer["items"][0],
+        dataHex=" ".join(f"{i:02X}" for i in range(64)),
+        length=64,
+        summary="GET_DESCRIPTOR(CONFIGURATION) wLength=67 (67B)",
+    )
+    _, wide_rows, wide_widths = usb_cmd._transfer_layout([wide], 64, columns=120)
+    check(
+        "窄终端整表不超宽",
+        sum(wide_widths) + 2 * (len(wide_widths) - 1) <= 120,
+        str(wide_widths),
+    )
+    check("窄终端仍按列换行", "\n" in wide_rows[0][7], str(wide_rows[0][7]))
+    control_item = dict(
+        transfer["items"][0],
+        type=2,
+        typeLabel="control",
+        setupHex="80 06 00 01 00 00 12 00",
+        dataHex="12 01 00 02",
+    )
+    control_rows = usb_cmd._transfer_rows([control_item], 64, 8)
+    check(
+        "控制传输拆成 CTL + 数据两行",
+        control_rows[0][4] == "CTL"
+        and control_rows[0][7].startswith("80 06 00 01")
+        and control_rows[1][4] == "IN"
+        and control_rows[1][7].startswith("12 01 00 02"),
+        str(control_rows),
+    )
+    plain_rows = usb_cmd._transfer_rows([control_item], 64, 8, show_setup=False)
+    check(
+        "--no-setup 只保留数据阶段",
+        len(plain_rows) == 1 and plain_rows[0][4] == "IN",
+        str(plain_rows),
+    )
+    bulk_item = transfer["items"][0]
+    bulk_rows = usb_cmd._transfer_rows([bulk_item], 64, 8)
+    check(
+        "批量传输不留描述噪音",
+        bulk_rows[0][4] == "IN" and bulk_rows[0][8] == "",
+        str(bulk_rows),
+    )
 
     detail = {
         "success": True,
@@ -936,7 +1196,7 @@ def main() -> int:
         ns(follow=True, duration=0.15, interval=0.05),
     )
     check("follow 默认从 nextId 开始", code == 0 and any("after_id=42" in p for p in calls), str(calls))
-    check("follow 输出新增传输", "BULK IN 5B" in out, out)
+    check("follow 输出新增传输", "41 54 0D 0A" in out, out)
 
     # ── 8. 服务路由与参数 ────────────────────────────────
     code, _, err = run_cli(["usb", "capture", "status", "--managed"])

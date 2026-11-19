@@ -70,8 +70,16 @@ Section "OMNI CLI" SecMain
 
   SetOutPath "$INSTDIR"
   File /oname=omni-path.ps1 "${SCRIPT_DIR}\installer-path.ps1"
+  File /oname=omni-shell.ps1 "${SCRIPT_DIR}\omni-shell.ps1"
   File /oname=README.md "${SCRIPT_DIR}\..\README.md"
   File /oname=LICENSE "${SCRIPT_DIR}\..\LICENSE"
+
+  ; 开始菜单里的「OMNI CLI Shell」：打开已配置好 omni 的终端（类似 ESP-IDF Command Prompt）。
+  ; USB 抓包需要管理员权限，右键该快捷方式选“以管理员身份运行”即可。
+  CreateDirectory "$SMPROGRAMS\OMNI CLI"
+  CreateShortCut "$SMPROGRAMS\OMNI CLI\OMNI CLI Shell.lnk" "${POWERSHELL}" \
+    '-NoLogo -NoExit -ExecutionPolicy Bypass -File "$INSTDIR\omni-shell.ps1"' \
+    "${CLI_BIN}\omni.exe" 0 SW_SHOWNORMAL "" "OMNI CLI 命令行终端"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
@@ -105,8 +113,12 @@ Section "Uninstall"
     SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
   ${EndIf}
 
+  Delete "$SMPROGRAMS\OMNI CLI\OMNI CLI Shell.lnk"
+  RMDir "$SMPROGRAMS\OMNI CLI"
+
   Delete "${CLI_BIN}\omni.exe"
   Delete "$INSTDIR\omni-path.ps1"
+  Delete "$INSTDIR\omni-shell.ps1"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Uninstall.exe"

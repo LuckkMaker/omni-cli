@@ -43,7 +43,6 @@ omni backend status            # link / bus 是否在运行、端口与版本
 omni probe list                # 探针是否可见
 omni toolchain                 # 编译器 / cmake / ninja 的解析来源
 omni usb doctor                # USBPcap / 管理员 / WinUSB 环境
-omni usb capture doctor        # 同上，抓包视角
 ```
 
 ## 4. 常见缺失
@@ -52,8 +51,8 @@ omni usb capture doctor        # 同上，抓包视角
 | --- | --- | --- |
 | `无法连接后端（端口无监听）` | 后端未启动 | `omni backend start bus`，或命令加 `--managed` |
 | `请求超时` | 后端被硬件操作阻塞或僵死 | `omni backend stop` 后重启 |
-| 设备在 `--all` 列表里但 `omni usb list` 为空 | 接口 GUID 与固件不一致，或 WinUSB 未绑定 | 检查 MS OS 2.0 描述符 / INF |
-| `omni usb open` 报拒绝访问 | 设备被其他进程独占 | 关闭 Keil / 厂商工具 / 已打开的 GUI 会话 |
+| `omni usb list` 里有设备但 `omni usb winusb list` 为空 | 接口 GUID 与固件不一致，或 WinUSB 未绑定 | 检查 MS OS 2.0 描述符 / INF |
+| `omni usb winusb open` 报拒绝访问 | 设备被其他进程独占 | 关闭 Keil / 厂商工具 / 已打开的 GUI 会话 |
 | `capture start` 报 `usbpcap_not_found` | 未装 USBPcap | 安装官方包并重启；或用 `--usbpcap-path` |
 | `capture start` 报 `not_elevated` | 终端非管理员 | 以管理员身份重开终端 |
 | 抓包有设备无数据 | 抓包晚于枚举 | 先 `capture start` 再插拔设备 |
@@ -65,6 +64,8 @@ omni usb capture doctor        # 同上，抓包视角
 | --- | --- |
 | `omni usb` 命令组（抓包/描述符/请求/测试） | CLI 0.28.0 / bus 0.2.0 |
 | USB 抓包、描述符、CDC/HID/WinUSB 请求、离线+真机用例 | CLI 0.28.0 / bus 0.2.0 |
-| `usb capture replay` | 未实现（长期项） |
+| 抓包列表「数据」列 / `--data-per-line` | CLI 0.29.0 |
+| `transfers --vid/--pid` 视图过滤 | CLI 0.31.0 / bus 0.2.0 |
+| `usb capture bind/unbind` | CLI 0.32.0 |
 
 > 里程碑与验收标准见 `omni-backend/docs/usb-plan.md`。

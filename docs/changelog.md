@@ -3,6 +3,130 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.39.0（2026-11-19）
+
+- 复合设备（`0xEF/0x02`）的控制请求按接口类补全解码：RNDIS（`0xEF/0x04`）的
+  `SEND_ENCAPSULATED_COMMAND` / `GET_ENCAPSULATED_RESPONSE` 不再显示成 `CLASS_0x00`；
+  CDC/HID/MSC/Hub 的接口同样受益。
+
+## 0.38.0（2026-11-19）
+
+- USBD 状态码补全：`CRC`、`XACT_ERROR`、`BABBLE_DETECTED`、`ENDPOINT_HALTED`、
+  `DEVICE_GONE`、`INVALID_PARAMETER`、`CANCELED`、`ERROR_SHORT_TRANSFER` 等；设备拔插/复位后
+  不再显示 `USBD_0xXXXXXXXX`。
+
+## 0.37.0（2026-11-19）
+
+- URB 行的 Function 名补齐（`ABORT_PIPE`、`RESET_PIPE`、`SYNC_RESET_PIPE_AND_CLEAR_STALL`、
+  `GET_MS_FEATURE_DESCRIPTOR` 等），不再只显示 `URB_0xNNNN`；其中 `0x002A` 是 Windows
+  枚举时查询 MS OS 2.0 描述符。
+- Hub class 请求按端口特性解码：`SET_FEATURE(PORT_RESET, port N)`、
+  `CLEAR_FEATURE(PORT_SUSPEND, port N)` 等。suspend/resume 本身不是 URB，抓不到；
+  reset/suspend 的意图可以从 hub 请求和管道控制 URB 看出来。
+
+## 0.36.0（2026-11-19）
+
+- `usb list --all` 改成带连接线的树：`USB → USBPcapN（root hub）→ 设备`，用
+  `├──` / `└──` / `│` 表达层级（`--json` 结构不变）；AGENTS 里补了这条树形数据视图的例外。
+
+## 0.35.0（2026-11-19）
+
+- `usb capture transfers` 改成 Bus Hound 风格：用 **Phase** 列表示阶段，控制传输拆成
+  `CTL`（SETUP 八字节）和 `IN`/`OUT`（数据阶段）两行；`--no-setup` 可只保留数据阶段。
+- 列顺序调整为 `ID 时间 设备 端点 Phase 长度 状态 数据 描述`：去掉「方向」「类型」，
+  「摘要」换成「描述」——控制传输给请求名，批量/中断只保留 MSC/CDC 类级解码，
+  `BULK IN 18B` 这类噪音不再显示。
+
+## 0.34.0（2026-11-19）
+
+- `omni usb list` 新增「所属 hub」列（USBPcapN）与 `--all` 树形视图：按 root hub 分组，
+  显示控制器名/PCI ID、`\\.\USBPcapN` 与当前绑定标记，bind 前可直接确认设备在哪颗 hub。
+- 映射来源：USBPcap 服务的实例顺序（`HKLM\SYSTEM\CurrentControlSet\Services\USBPcap\Enum`）
+  对应 `USBPcapN`，设备归属用 CfgMgr32 父链上溯到 `USB\ROOT_HUB`（后端新增
+  `core/usb_topology.py`）。
+- `usb list` 默认表格去掉「实例 ID」列（`--json` 仍保留），避免加 hub 列后过宽。
+
+## 0.33.2（2026-11-19）
+
+- `transfers --follow` 带 `--vid/--pid` 时，先检查当前抓包里有没有该设备的描述符；没有就
+  立即提示「过滤不会命中、先 stop/start 再插拔；仍没有则换 USBPcap2」，不再静默等待。
+
+## 0.33.1（2026-11-19）
+
+- `transfers --vid/--pid` 没有命中时区分两种情况：完全没抓到数据 vs 抓到了但映射不到该
+  VID/PID（设备在 capture start 前已枚举），后者给出「重启抓包再插拔」的下一步；
+  `--follow` 的等待提示也带上过滤条件。
+
+## 0.33.0（2026-11-19）
+
+- 收敛 `omni usb` 命令面：
+  - 删除未实现的 `usb capture replay`（help 里像能用，实际只返回里程碑提示）；
+  - `usb capture doctor` 与 `usb doctor` 是同一处理器，合并为 `usb doctor`；
+  - 文档/skill 同步：设备入口是 `usb list`，环境诊断是 `usb doctor`，抓包生命周期是
+    `capture bind → start → transfers/detail → stop`。
+
+## 0.32.0（2026-11-19）
+
+- 新增 `usb capture bind` / `usb capture unbind`：绑定默认 root hub（写入用户级
+  `cli.config.json`），之后 `capture start` 不用再传 `--device`。优先级：显式 `--device` >
+  绑定 > 环境中唯一的一个；多个又没绑定时报错并列出可选值。
+- `usb capture doctor` 显示当前绑定的 hub。
+
+## 0.31.1（2026-11-19）
+
+- `usb capture transfers` 的 `--device` 只接受设备地址；传 root hub 路径（`\\.\USBPcap1`）时
+  直接提示「这里是设备地址、root hub 在 capture start 里选」，不再抛 argparse 的 invalid int。
+- `usb capture transfers --endpoint` 支持 `0x81` 十六进制写法。
+
+## 0.31.0（2026-11-19）
+
+- `usb capture transfers` 新增 `--vid` / `--pid`：按抓包里的设备描述符映射到设备地址后过滤视图
+  （要求抓包期间抓到该设备的 GET_DESCRIPTOR）；后端 `/api/usb/transfers` 同步支持
+  `vid` / `pid` 参数。
+
+## 0.30.1（2026-11-19）
+
+- 修复子命令帮助错行：argparse 计算帮助列时少算 2 列缩进，最长命令名（如 `transfers`）
+  被挤到下一行；现在所有子命令组（`usb capture`、`usb winusb`、`serial`、`net` 等）都对齐。
+
+## 0.30.0（2026-11-19）
+
+- 新增 `omni usb list`：列出系统 USB 设备（VID/PID、描述、驱动服务、实例 ID），支持
+  `--vid` / `--pid` / `--driver` 过滤与 `--json`；`usb winusb list --all` 保留为等价入口。
+
+## 0.29.2（2026-11-19）
+
+- `usb capture transfers` 的控制传输在数据列首行显示 SETUP 八字节（`S:` 前缀，如
+  `S:80 06 00 01 00 00 12 00`），`--no-setup` 可关；需要后端列表接口返回 `setupHex`
+  （源码后端重启即可，旧后端只是不显示这一行）。
+
+## 0.29.1（2026-11-19）
+
+- 数据列默认 8 字节/行在 120 列控制台也能放下（摘要列下限从 24 收到 16），不再退化成 4 字节。
+- 「OMNI CLI Shell」优先在 Windows Terminal 中打开（`wt.exe`，滚动历史不会被打断），
+  没装或加 `-NoTerminal` 时退回当前控制台。
+
+## 0.29.0（2026-11-19）
+
+- `omni usb capture start --device USBPcap1` 这类短名会补全成 `\\.\USBPcap1`：USBPcapCMD
+  的 `-d` 只认设备路径，传短名会立即退出且不报错，表现为「已开始捕获」但一条传输都没有。
+- `omni usb capture doctor` 的「可抓 root hub」改为打印设备路径，可直接复制给 `--device`。
+- `omni usb capture transfers` 新增「数据」列（排在摘要之前，和 Bus Hound 一致）：payload 以
+  hex 按行显示，默认每行 8 字节，`--data-per-line 4|8|16` 可调，窗口过窄时自动降到 4，
+  超长部分用 `…` 标注；`--data-bytes N` 控制显示字节数（默认 64，0 表示隐藏该列）。
+- 表格渲染按终端显示宽度对齐（CJK 记 2 列），支持单元格内换行；整表超宽时先压摘要列，
+  中文表头不再错位，数据列不会因窗口折行而跑到行首。
+- 已安装 GUI 的后端查找不再依赖 C 盘默认路径：CLI 从注册表 `Uninstall` 键的
+  `InstallLocation` / `DisplayIcon` / `UninstallString` 反推安装根目录，任意盘符、
+  per-user 与 per-machine 两种安装都能复用；`backend start` 失败提示改为列出实际
+  检查过的目录，并点名 `OMNI_LINK_HOME` / `OMNI_BUS_HOME`（原先误指 `OMNI_*_STATE_DIR`）。
+- 新增 `scripts/dev-bus.ps1`：一键停掉现有后端并改用源码后端。
+- 安装包新增「OMNI CLI Shell」开始菜单入口（`scripts/omni-shell.ps1`）：打开就是一个已配置好
+  `omni` 的终端（类似 ESP-IDF Command Prompt），自动识别安装版 / 源码版；USB 抓包右键选
+  「以管理员身份运行」。
+- `scripts/build-exe.ps1` 补 UTF-8 BOM：Windows PowerShell 5.1 下无 BOM 会把中文字符串按 GBK
+  解码，脚本直接解析失败。
+
 ## 0.28.1（2026-11-18）
 
 - CLI 呈现统一到 `python -h` / `pip -h` 的风格：帮助只做缩进对齐与按显示宽度折行，

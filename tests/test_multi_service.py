@@ -183,6 +183,67 @@ def test_autoinstall_candidates() -> None:
             os.environ["OMNI_LINK_HOME"] = saved
 
 
+# ── 6b. 注册表卸载登记反查 ────────────────────────────────────
+def test_autoinstall_registry() -> None:
+    print("[6b] 注册表卸载登记反查安装目录")
+    check("bus 的显式变量名", autoinstall.home_env_var("bus") == "OMNI_BUS_HOME",
+          autoinstall.home_env_var("bus"))
+    check("link 的显式变量名", autoinstall.home_env_var("link") == "OMNI_LINK_HOME",
+          autoinstall.home_env_var("link"))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bus_home = Path(tmp) / "OMNI Bus"
+        backend = bus_home / "resources" / "python" / "omni-bus-backend.exe"
+        backend.parent.mkdir(parents=True)
+        backend.write_bytes(b"MZ")
+
+        # 1) 只有 DisplayIcon：electron-builder 的 NSIS 常常不写 InstallLocation
+        entry = {
+            "name": "OMNI Bus 0.2.4",
+            "install_location": "",
+            "display_icon": f"{bus_home / 'OMNI Bus.exe'},0",
+            "uninstall_string": "",
+        }
+        home = autoinstall.home_from_uninstall_entry(entry, "bus")
+        check("DisplayIcon 反推安装目录", home == str(bus_home), str(home))
+
+        # 2) InstallLocation 直接命中
+        entry = {"name": "OMNI Bus 0.2.4", "install_location": str(bus_home),
+                 "display_icon": "", "uninstall_string": ""}
+        check("InstallLocation 反推安装目录",
+              autoinstall.home_from_uninstall_entry(entry, "bus") == str(bus_home))
+
+        # 3) 只有 UninstallString（带引号与 /allusers 参数）
+        uninst = bus_home / "Uninstall OMNI Bus.exe"
+        entry = {"name": "OMNI Bus 0.2.4", "install_location": "",
+                 "display_icon": "",
+                 "uninstall_string": f'"{uninst}" /allusers'}
+        check("UninstallString 反推安装目录",
+              autoinstall.home_from_uninstall_entry(entry, "bus") == str(bus_home))
+
+        # 4) 名称不匹配 / 服务不串用
+        check("非 OMNI 应用不匹配",
+              autoinstall.home_from_uninstall_entry(
+                  {"name": "Other Tool", "install_location": str(bus_home)}, "bus") is None)
+        check("Link 条目不会命中 bus",
+              autoinstall.home_from_uninstall_entry(
+                  {"name": "OMNI Link 0.5.10", "install_location": str(bus_home)}, "bus") is None)
+
+        # 5) 目录里没有后端时不算命中（避免把卸载残留当成可用安装）
+        empty_home = Path(tmp) / "empty"
+        empty_home.mkdir()
+        check("无后端文件的目录不算命中",
+              autoinstall.home_from_uninstall_entry(
+                  {"name": "OMNI Bus 0.2.4", "install_location": str(empty_home)}, "bus") is None)
+
+    # 6) homes_from_registry：非 Windows 或没装 GUI 时返回空列表，装了则返回安装根目录
+    autoinstall._registry_homes_cache.clear()
+    homes = autoinstall.homes_from_registry("bus")
+    check("homes_from_registry 返回列表", isinstance(homes, list), str(type(homes)))
+    check("homes_from_registry 结果去重", len(homes) == len(set(homes)), str(homes))
+    autoinstall._registry_homes_cache.clear()
+
+
 def main() -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -196,6 +257,7 @@ def main() -> int:
         test_service_for()
         test_reject_managed()
         test_autoinstall_candidates()
+        test_autoinstall_registry()
     except Exception:
         import traceback
         traceback.print_exc()

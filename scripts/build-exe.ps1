@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     构建单文件 OMNI CLI 可执行文件（omni.exe）。
 
