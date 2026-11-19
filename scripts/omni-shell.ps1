@@ -100,6 +100,19 @@ try {
     $status = & omni backend status bus --json 2>$null | ConvertFrom-Json
     if ($status.running) {
         $backend = "运行中 端口=$($status.port) pid=$($status.pid) 版本=$($status.version)"
+        # 抓包权限看的是后端进程，不是这个终端：把后端的提权状态也打出来
+        try {
+            $usbEnv = & omni usb doctor --json 2>$null | ConvertFrom-Json
+            if ($null -ne $usbEnv.elevated) {
+                if ($usbEnv.elevated) {
+                    $backend += "（后端已提权）"
+                } else {
+                    $backend += "（后端未提权：capture start 会失败）"
+                }
+            }
+        } catch {
+            # 旧后端没有 environment 接口，忽略
+        }
     }
 } catch {
     # 后端没起或 JSON 解析失败：保持“未运行”
