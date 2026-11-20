@@ -226,6 +226,11 @@ def generate_project_config(
             emit(f"Warning: omni_bspgen failed: {exc}")
 
     if msp:
+        emit(
+            "Warning: --msp 已废弃：生成的 driver_msp_config.h 不被任何驱动引用，"
+            "引脚/时钟/DMA 由 vendor（CubeMX MSP、SoC 的 GPIO_Config）提供。"
+            "该选项仅作兼容保留，将在后续版本移除。"
+        )
         from . import mspconfig
 
         msp_file = mspconfig.run_msp_config(omni_root, project_dir, target, dot_config, log=emit)

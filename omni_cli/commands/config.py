@@ -28,7 +28,8 @@ def add_parser(sub):
     s = ps.add_parser("generate", parents=[config_parser()],
                       help="生成/更新工程配置（Kconfig + BSP，可选 MSP/Keil 同步）")
     s.add_argument("--msp", action="store_true", default=False,
-                   help="同时生成 driver_msp_config.h")
+                   help="（已废弃，仅兼容保留）同时生成 driver_msp_config.h；"
+                        "MSP 由 vendor 提供，该文件不被驱动引用")
     s.add_argument("--no-bsp", action="store_true", default=False,
                    help="跳过 bsp_config.h 生成")
     s.add_argument("--sync-keil", action="store_true", default=False,

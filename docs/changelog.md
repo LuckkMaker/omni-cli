@@ -3,6 +3,15 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.42.0（2026-11-20）
+
+- `config generate --msp` 标记为废弃：生成的 `driver_msp_config.h` 在本仓无任何驱动 include，
+  也没有任何 SoC 提供模板文件。引脚/时钟/DMA 的实际归属是 vendor（CubeMX/SoC 的 `GPIO_Config()`），
+  所以该选项不再有意义。**行为暂不变**（仍会生成），但会打印废弃警告，后续版本移除。
+- `omni build` 的链接 map 名跟镜像名走：GCC/CLANG 由 `omni.axf.map` 改成 `omni.elf.map`
+  （AC6 仍是 `omni.axf.map`），与 cbuild 的 `<image>.map` 一致；产物汇总与 `--json` 的
+  `artifacts` 里出现的就是对应镜像的那个名字。
+
 ## 0.41.0（2026-11-19）
 
 - `flash program --erase {sector,chip}`：可选擦除模式。默认 `sector` 只擦镜像覆盖的扇区；

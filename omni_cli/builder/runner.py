@@ -4,7 +4,8 @@
 
 - 构建目录 ``<project>/build/<board>/<COMPILER>/<buildtype>``
 - 工具链文件 ``<omni_root>/cmake/toolchains/<compiler>.cmake``
-- 产物 ``omni.axf`` / ``omni.hex`` / ``omni.bin`` / ``omni.axf.map`` / ``omni.size.txt``
+- 产物 ``omni.axf``（AC6）/ ``omni.elf``（GCC、CLANG）/ ``omni.hex`` / ``omni.bin`` /
+  ``omni.axf.map``（AC6）/ ``omni.elf.map``（GCC、CLANG）/ ``omni.size.txt``
 """
 
 from __future__ import annotations
@@ -40,8 +41,21 @@ ARTIFACTS = (
     "omni.hex",
     "omni.bin",
     "omni.axf.map",
+    "omni.elf.map",
     "omni.size.txt",
 )
+
+
+def map_file(compiler: str) -> str:
+    """链接 map 名跟镜像名走（与 cbuild 一致）。
+
+    AC6/AC5 的镜像是 ``omni.axf``，map 是 ``omni.axf.map``；
+    GCC/CLANG 的镜像是 ``omni.elf``，map 是 ``omni.elf.map``。
+    """
+
+    return "omni.elf.map" if compiler in ("gcc", "clang") else "omni.axf.map"
+
+
 SIZE_RE = re.compile(
     r"Program Size:\s*Code=(\d+)\s+RO-data=(\d+)\s+RW-data=(\d+)\s+ZI-data=(\d+)"
 )
@@ -532,7 +546,7 @@ def run_build(
 
         result.built = True
         result.artifacts = collect_artifacts(build_dir)
-        result.size = parse_size(os.path.join(build_dir, "omni.axf.map"))
+        result.size = parse_size(os.path.join(build_dir, map_file(compiler)))
         result.gnu_size = parse_gnu_size(os.path.join(build_dir, "omni.size.txt"))
         result.success = True
         return _finalize(result)

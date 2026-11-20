@@ -39,6 +39,7 @@ from omni_cli.builder.runner import (
     build_directory,
     cache_conflicts,
     collect_artifacts,
+    map_file,
     parse_size,
     read_cache_context,
     run_build,
@@ -167,6 +168,9 @@ def test_parse_size_and_artifacts() -> None:
         found = collect_artifacts(tmp)
         check("artifacts.subset", {"omni.axf", "omni.hex"} <= set(found), str(sorted(found)))
         check("artifacts.list", "omni.axf.map" in ARTIFACTS and "omni.elf" in ARTIFACTS)
+        check("artifacts.map", "omni.elf.map" in ARTIFACTS)
+        check("map.file", map_file("ac6") == "omni.axf.map" and map_file("gcc") == "omni.elf.map"
+              and map_file("clang") == "omni.elf.map", map_file("gcc"))
 
 
 def test_report_helpers() -> None:
