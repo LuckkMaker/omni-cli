@@ -3,6 +3,59 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.46.0（2026-11-24）
+
+- `config generate` 额外输出 `<config-dir>/kconfig_sources.txt`：本次**实际解析到的**
+  Kconfig 文件清单（每行一个绝对路径）。构建系统把它挂到 `CMAKE_CONFIGURE_DEPENDS` 后，
+  改任意一个 Kconfig（含新增驱动目录里的）都会自动重配，不再需要手工 `omni build --cmake`。
+  做法对齐 Zephyr 的 `PARSED_KCONFIG_SOURCES_TXT`（`zephyr/cmake/modules/kconfig.cmake`）。
+- `config --json` 的 `generated` 列表包含这个文件。
+
+## 0.45.1（2026-11-24）
+
+- **恢复 `omni build` 结尾的段级细账**：0.45.0 把 `size  Code=… RO-data=… RW-data=…
+  ZI-data=…`（AC6/AC5）和 `size  text=… data=… bss=…`（GCC/CLANG）这行改成了只在
+  `-v` 时打印，默认输出只剩区域进度条。现在两者都打印：先区域条，再段级细账，信息与
+  0.44 及更早版本一致。
+- 区域进度条本身不变（数据来源、`--json` 的 `memory_regions`、`-t size` 修复都不变）。
+
+## 0.45.0（2026-11-24）
+
+- **`omni build` 结束现在打印内存区域占用（ASCII 进度条）**：链接完成后按链接脚本里的
+  区域（`FLASH` / `RAM` / `CCMRAM` …）给出「已用 / 上限 / 百分比」，像 west 的内存报告
+  但排版固定、不随链接器变：
+
+  ```text
+  构建完成  18 步  3.0s
+    FLASH   [#...................]  17672 B /   1 MB   1.69%
+    RAM     [#...................]   4544 B / 128 KB   3.47%
+    CCMRAM  [....................]      0 B /  64 KB   0.00%
+  ```
+
+  数据来源：GCC/CLANG 取链接器 `-Wl,--print-memory-usage` 的已用字节与链接 map
+  `Memory Configuration` 的区域上限；AC6/AC5 取 armlink map 的 `Load Region` /
+  `Execution Region`。增量构建没有重新链接时按 map 里段的 VMA/LMA 求和（ELF 里
+  `SHT_NOBITS` 的 `.bss` 不算 Flash）；lld 的 map 不含区域上限，复用上一次链接缓存到
+  `<build-dir>/omni.memory.json` 的结果。链接器原来那段每行夹空行的
+  `Memory region ...` 原始输出不再逐行转发，原文仍完整保留在 `build.log`。
+- 段级细账（`Code=/RO-data=...` 或 `text=/data=/bss=`）当时只在 `-v` 时打印
+  （0.45.1 起恢复为默认打印）。没有链接 map（例如只配置了没链接）时不显示进度条，仍打印细账。
+- `--json` 新增 `memory_regions`：`[{"name", "used", "capacity", "percent"}]`，脚本/CI
+  可以直接拿百分比做门禁（`size` / `gnu_size` 字段保持不变）。
+- 修复 **`omni build -t size`**：size 目标名改为 configure 之后从 `build.ninja` 解析
+  （真实名字是 `omni-size-<CMake 可执行目标>`），不再假设它等于工程目录名。此前
+  `project(template)` + `add_executable(app)` 这类工程会报
+  `ninja: error: unknown target 'omni-size-template'`；工程里存在多个 size 目标且都
+  对不上工程名时会报错并列出候选，用 `-t <cmake target>` 明确指定。
+
+## 0.45.0（2026-11-24）
+
+- `config generate` 额外输出 `<config-dir>/kconfig_sources.txt`：本次**实际解析到的**
+  Kconfig 文件清单（每行一个绝对路径）。构建系统用它挂 `CMAKE_CONFIGURE_DEPENDS`，
+  改任意一个 Kconfig（含新增驱动目录里的）都会自动重配，不再需要手工 `omni build --cmake`。
+  做法对齐 Zephyr 的 `PARSED_KCONFIG_SOURCES_TXT`（`zephyr/cmake/modules/kconfig.cmake`）。
+- 顺带：`config --json` 的 `generated` 列表里包含这个文件。
+
 ## 0.44.0（2026-11-24）
 
 - **menuconfig 改动会持久化**：`omni config menuconfig` 保存后，把它相对"生成前配置"的实际

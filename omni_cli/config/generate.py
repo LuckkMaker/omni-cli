@@ -306,6 +306,9 @@ def generate_project_config(
     dot_config = os.path.join(config_dir, ".config")
     header_out = os.path.join(config_dir, "omni_config.h")
     log_file = os.path.join(config_dir, "kconfig_log.txt")
+    # 本次解析到的 Kconfig 清单：构建系统据此挂 configure 依赖，
+    # 改任意一个 Kconfig 都会触发重配（否则头文件静默沿用旧值）。
+    sources_file = os.path.join(config_dir, "kconfig_sources.txt")
 
     if clean_config:
         _clean_old_config(dot_config)
@@ -342,6 +345,7 @@ def generate_project_config(
                 handwritten_input_configs=clean_config,
                 omni_base=omni_root,
                 srctree=omni_root,
+                sources_out=sources_file,
                 log=emit,
                 err=err,
             )
@@ -355,7 +359,7 @@ def generate_project_config(
             except OSError:
                 pass
 
-    result.generated.extend([dot_config, header_out, log_file])
+    result.generated.extend([dot_config, header_out, log_file, sources_file])
 
     if not no_bsp:
         try:

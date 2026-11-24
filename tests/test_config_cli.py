@@ -181,6 +181,14 @@ def test_config_dir(root: Path) -> None:
     check("omni 根不残留临时 Kconfig", not list((root / "omni").glob("omni-app-*.Kconfig")))
     check("config 目录不残留临时 Kconfig", not list(cfg.glob("omni-app-*.Kconfig")))
 
+    sources = cfg / "kconfig_sources.txt"
+    check("输出 Kconfig 解析清单", sources.exists(), str(sources))
+    if sources.exists():
+        listed = [line.strip() for line in sources.read_text(encoding="utf-8").splitlines() if line.strip()]
+        check("清单含 omni 主 Kconfig", any(line.endswith("/Kconfig.omni") for line in listed), str(listed[:5]))
+        check("清单含工程 Kconfig", any(line.endswith("/app/Kconfig") for line in listed), str(listed[:5]))
+        check("清单条目是绝对路径", all(os.path.isabs(line) for line in listed), str(listed[:3]))
+
     code, out, err = run_cli(
         [
             "config", "bsp", "--project-dir", str(app), "-b", "board1",

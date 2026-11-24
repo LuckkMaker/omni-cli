@@ -74,10 +74,15 @@ def merge_config(
     forced_input_configs: bool = False,
     omni_base: Optional[str] = None,
     srctree: Optional[str] = None,
+    sources_out: Optional[str] = None,
     log: Callable[[str], None] = print,
     err: TextIO = sys.stderr,
 ) -> None:
     """合并配置片段并写出 ``.config`` / 头文件 / Kconfig 清单。
+
+    ``sources_out`` 给出时，额外写出本次**实际解析到的 Kconfig 文件清单**
+    （每行一个绝对路径）。构建系统用它挂 configure 依赖：改任意一个 Kconfig
+    都要重新配置，否则头文件会静默沿用旧值。
 
     失败时抛出 :class:`KconfigMergeError`，由 CLI 统一映射退出码。
     """
@@ -93,6 +98,15 @@ def merge_config(
             raise KconfigMergeError(f"解析 Kconfig 失败: {exc}") from exc
 
         log("Parsing " + kconfig_file)
+
+        if sources_out:
+            # 合成 Kconfig 是每次配置随机命名的临时文件，生成后即删；
+            # 把它写进依赖清单会让构建系统永远认为依赖缺失、每次都重配。
+            _write_kconfig_sources(
+                sources_out,
+                [name for name in kconf.kconfig_filenames
+                 if os.path.abspath(name) != os.path.abspath(kconfig_file)],
+            )
 
         if handwritten_input_configs:
             # Warn for assignments to undefined symbols, but only for handwritten
@@ -143,6 +157,17 @@ def merge_config(
         log(kconf.write_config(config_out))
         log(kconf.write_autoconf(header_out))
         _write_kconfig_filenames(kconf, kconfig_list_out)
+
+
+def _write_kconfig_sources(path: str, filenames: Iterable[str]) -> None:
+    """写出本次解析到的 Kconfig 文件清单（供构建系统挂 configure 依赖）。"""
+
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        for name in filenames:
+            handle.write(os.path.abspath(name).replace("\\", "/") + "\n")
 
 
 def _check_no_promptless_assign(kconf: Kconfig) -> None:
