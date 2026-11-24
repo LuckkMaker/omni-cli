@@ -1634,8 +1634,123 @@ def _usb_id_value(value) -> int | None:
         return None
 
 
+def _capture_address_sort_key(address: str) -> tuple[int, int]:
+    """按 ``bus.device`` 的数值而不是字符串排序。"""
+    try:
+        bus, device = str(address).split(".", 1)
+        return int(bus), int(device)
+    except (TypeError, ValueError):
+        return sys.maxsize, sys.maxsize
+
+
+def _captured_usb_devices(c: ApiClient) -> list[dict]:
+    """读取当前实时抓包的设备地址映射。
+
+    USBPcap 动态地址只对正在进行的实时抓包有意义。离线 pcap 或已停止的旧会话
+    可能与 Windows 当前枚举出来的设备无关，因此不拿来装饰 ``usb list``。
+    """
+    try:
+        status = c.get("/api/usb/capture/status")
+        if not status.get("running") or status.get("mode") != "live":
+            return []
+        data = c.get("/api/usb/devices")
+    except Exception:
+        # 兼容没有抓包 API 的旧后端；系统 USB 枚举本身仍应正常工作。
+        return []
+
+    captured: list[dict] = []
+    for node in data.get("tree") or []:
+        if node.get("kind") != "device":
+            continue
+        fields = {
+            str(field.get("name") or ""): str(field.get("value") or "")
+            for field in node.get("fields") or []
+        }
+        ids = fields.get("VID:PID", "").split(":", 1)
+        address = fields.get("地址", "")
+        if len(ids) != 2 or "." not in address:
+            continue
+        vid, pid = _usb_id_value(ids[0]), _usb_id_value(ids[1])
+        try:
+            bus, device = (int(part) for part in address.split(".", 1))
+        except ValueError:
+            continue
+        if vid is None or pid is None:
+            continue
+        captured.append(
+            {
+                "vid": vid,
+                "pid": pid,
+                "bus": bus,
+                "device": device,
+                "address": f"{bus}.{device}",
+                "serial": fields.get("序列号") or None,
+            }
+        )
+    return captured
+
+
+def _device_hub_index(item: dict) -> int | None:
+    """取 Windows 拓扑对应的 USBPcapN 序号。"""
+    try:
+        return int(item.get("hubIndex"))
+    except (TypeError, ValueError):
+        label = str(item.get("hubLabel") or "")
+        suffix = label[7:] if label.lower().startswith("usbpcap") else ""
+        return int(suffix) if suffix.isdigit() else None
+
+
+def _with_capture_addresses(c: ApiClient, devices: list[dict]) -> list[dict]:
+    """优先使用 hub IOCTL 地址，旧后端或查询失败时回退到实时抓包。"""
+    need_fallback = any(
+        item.get("vid")
+        and item.get("pid")
+        and not item.get("captureAddresses")
+        for item in devices
+    )
+    captured = _captured_usb_devices(c) if need_fallback else []
+    annotated: list[dict] = []
+    for source in devices:
+        item = dict(source)
+        direct = sorted(
+            {str(value) for value in item.get("captureAddresses") or []},
+            key=_capture_address_sort_key,
+        )
+        if direct:
+            item["captureAddresses"] = direct
+            annotated.append(item)
+            continue
+
+        vid, pid = _usb_id_value(item.get("vid")), _usb_id_value(item.get("pid"))
+        hub_index = _device_hub_index(item)
+        matches = [
+            record
+            for record in captured
+            if record["vid"] == vid
+            and record["pid"] == pid
+            and (hub_index is None or record["bus"] == hub_index)
+        ]
+
+        # 同一 hub 上有多个相同 VID/PID 时，真实 USB 序列号可以消除歧义。
+        # 复合接口的 Windows 实例后缀并不一定是设备序列号，匹配不到时保留全部候选。
+        serial = str(item.get("serial") or "")
+        serial_matches = [record for record in matches if record.get("serial") == serial]
+        if serial and serial_matches:
+            matches = serial_matches
+
+        item["captureAddresses"] = sorted(
+            {record["address"] for record in matches}, key=_capture_address_sort_key
+        )
+        annotated.append(item)
+    return annotated
+
+
+def _capture_addresses_text(item: dict) -> str:
+    return ",".join(str(value) for value in item.get("captureAddresses") or []) or "-"
+
+
 def _all_usb_devices(c: ApiClient, args, *, vid=None, pid=None, driver=None):
-    """列出系统里的 USB 设备（VID/PID、驱动服务、实例 ID）。"""
+    """列出系统 USB 设备，并关联当前 USBPcap 动态地址。"""
     from urllib.parse import quote
 
     query = "?service=" + quote(driver) if driver else ""
@@ -1655,6 +1770,7 @@ def _all_usb_devices(c: ApiClient, args, *, vid=None, pid=None, driver=None):
             for item in devices
             if (item.get("service") or "").lower() == driver.lower()
         ]
+    devices = _with_capture_addresses(c, devices)
     payload = dict(data, devices=devices)
 
     if args.all:
@@ -1681,10 +1797,11 @@ def _all_usb_devices(c: ApiClient, args, *, vid=None, pid=None, driver=None):
             item.get("description") or "-",
             item.get("service") or "-",
             item.get("hubLabel") or "-",
+            _capture_addresses_text(item),
         ]
         for item in devices
     ]
-    print_table(["VID:PID", "描述", "驱动服务", "所属 hub"], rows)
+    print_table(["VID:PID", "描述", "驱动服务", "所属 hub", "USB 地址"], rows)
     return 0
 
 
@@ -1747,7 +1864,8 @@ def _print_hub_tree(groups: list[dict], bound: str | None) -> None:
                 child_prefix
                 + ("└── " if device_last else "├── ")
                 + f"{vid}  {item.get('description') or '-'}  "
-                + f"{item.get('service') or '-'}"
+                + f"{item.get('service') or '-'}  "
+                + f"USB 地址 {_capture_addresses_text(item)}"
             )
     print("\n".join(lines))
 
@@ -2144,7 +2262,7 @@ def add_parser(sub):
     s.set_defaults(func=run_command(_doctor))
 
     # ── 设备列表 ──────────────────────────────────────────
-    s = ps.add_parser("list", parents=[common_parser()], help="列出系统 USB 设备（VID/PID、驱动、实例 ID）")
+    s = ps.add_parser("list", parents=[common_parser()], help="列出系统 USB 设备（VID/PID、驱动、hub、动态地址）")
     s.add_argument("--vid", help="按 VID 过滤，如 0xC251")
     s.add_argument("--pid", help="按 PID 过滤，如 0x0002")
     s.add_argument("--driver", help="按驱动服务过滤，如 WINUSB / usbser / HidUsb")

@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.45.1**（build 打印内存区域占用进度条 / bsp_config.h 声明板级导出对象 / 链接 map 按镜像名区分）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.50.0**（`usb list` 无需抓包即可显示动态 USB 地址；build 支持 ROM/RAM 符号级报告）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 
@@ -336,6 +336,25 @@ omni net tcp-client auto-send stop        # 返回发送/失败计数
 **游标记忆**：`read` 默认续读上次位置（记录在 `<服务状态目录>/.read_cursor.json`），
 所以「发一条、收一条」不会重放历史；首次读从最旧数据开始；`--since 0` 显式要求
 从头读，`--since N` 覆盖记录。`rtt` / `serial` / `net` 三个流式命令共用这一行为。
+
+### `usb` — USB 设备、请求与抓包（bus 服务）
+
+| 子命令 | 说明 |
+| --- | --- |
+| `list` | 列出 VID:PID、描述、驱动、所属 USBPcap hub 与动态 USB 地址；`--all` 按 hub 显示树形视图，`--json` 用 `captureAddresses` 数组返回地址 |
+| `capture start/stop/status` | 启停 USBPcap 实时抓包并查看统计；开始抓包需要管理员权限 |
+| `capture transfers/detail/devices` | 跟踪传输、查看单条详情、查看抓包重建的描述符设备树 |
+| `desc` / `winusb` / `hid` / `cdc` / `test` | 解析与生成描述符、通过对应驱动收发、运行 USB 回归用例 |
+
+「USB 地址」采用 `bus.device` 格式，例如 `2.47`。bus 后端 0.3.0+ 直接读取 Windows hub，
+不需要启动抓包；查询失败或使用旧后端时，CLI 回退到正在运行的实时抓包描述符映射。
+同一 hub 上有多个相同 VID/PID 且没有可匹配的 USB 序列号时，回退结果显示逗号分隔的候选地址。
+
+```powershell
+omni usb list
+omni usb capture start --devices 47
+omni usb capture transfers --follow --bus 2 --device 47
+```
 
 ### `system` — 系统信息
 

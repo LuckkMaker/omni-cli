@@ -10,4 +10,4 @@
   `omni modules`，本地执行，只读 omni-emb 框架的 Kconfig / boards 数据。
 """
 
-__version__ = "0.48.0"
+__version__ = "0.50.0"

@@ -858,13 +858,91 @@ def main() -> int:
     code, out, _ = capture(usb_cmd._usb_list, client, ns())
     check("usb list 显示所属 hub", code == 0 and "USBPcap2" in out, out)
 
-    client = StubClient({"/api/usb/winusb/all-devices": hub_devices})
+    ioctl_device = dict(
+        hub_devices["devices"][0],
+        captureAddresses=["2.47"],
+        usbBus=2,
+        usbDeviceAddress=47,
+        addressSource="hub_ioctl",
+    )
+    client = StubClient(
+        {"/api/usb/winusb/all-devices": {"success": True, "devices": [ioctl_device]}}
+    )
+    code, out, _ = capture(usb_cmd._usb_list, client, ns())
+    check(
+        "usb list 无抓包时使用 hub IOCTL 动态地址",
+        code == 0 and "USB 地址" in out and "2.47" in out,
+        out,
+    )
+    check(
+        "hub IOCTL 地址齐全时不查询抓包状态",
+        len(client.calls) == 1 and client.calls[0][1].startswith("/api/usb/winusb/all-devices"),
+        str(client.calls),
+    )
+
+    active_capture = {"running": True, "mode": "live"}
+    capture_tree = {
+        "tree": [
+            {
+                "kind": "device",
+                "title": "0xC251:0x0005 设备 007",
+                "fields": [
+                    {"name": "地址", "value": "1.7"},
+                    {"name": "VID:PID", "value": "0xC251:0x0005"},
+                ],
+            },
+            {
+                "kind": "device",
+                "title": "0xC251:0x0005 设备 026",
+                "fields": [
+                    {"name": "地址", "value": "2.26"},
+                    {"name": "VID:PID", "value": "0xC251:0x0005"},
+                ],
+            },
+        ]
+    }
+    mapped_responses = {
+        "/api/usb/winusb/all-devices": hub_devices,
+        "/api/usb/capture/status": active_capture,
+        "/api/usb/devices": capture_tree,
+    }
+    code, out, _ = capture(usb_cmd._usb_list, StubClient(mapped_responses), ns())
+    check(
+        "usb list 显示当前 hub 的抓包动态地址",
+        code == 0 and "USB 地址" in out and "2.26" in out and "1.7" not in out,
+        out,
+    )
+
+    code, out, _ = capture(
+        usb_cmd._usb_list, StubClient(mapped_responses), ns(json_=True)
+    )
+    mapped_json = json.loads(out)
+    check(
+        "usb list --json 返回抓包地址数组",
+        code == 0 and mapped_json["devices"][0]["captureAddresses"] == ["2.26"],
+        out,
+    )
+
+    inactive_responses = dict(mapped_responses)
+    inactive_responses["/api/usb/capture/status"] = {"running": False, "mode": "live"}
+    code, out, _ = capture(
+        usb_cmd._usb_list, StubClient(inactive_responses), ns(json_=True)
+    )
+    inactive_json = json.loads(out)
+    check(
+        "usb list 不使用已停止抓包的旧地址",
+        code == 0 and inactive_json["devices"][0]["captureAddresses"] == [],
+        out,
+    )
+
+    client = StubClient(mapped_responses)
     code, out, _ = capture(usb_cmd._usb_list, client, ns(all=True))
     check(
         "usb list --all 按 hub 分组",
         code == 0
         and out.index("USBPcap1") < out.index("USBPcap2")
-        and "0xC251:0x0005" in out,
+        and "0xC251:0x0005" in out
+        and "USB 地址 2.26" in out,
         out,
     )
     check("usb list --all 树形连接线", "├──" in out or "└──" in out, out)
