@@ -95,6 +95,12 @@ def make_tree(root: Path) -> Path:
     write(app / "boards" / "board1" / "board.conf", "CONFIG_TEST_BOOL=y\n")
     write(app / "boards" / "board2" / "board.conf", "CONFIG_TEST_INT=5\n")
     write(app / "src" / "app.c", "GPIO_DEVICE_DEFINE(demo, NULL);\n")
+    write(
+        app / "boards" / "board1" / "bsp.c",
+        "GPIO_DEVICE_DEFINE(gpioe, NULL);\n"
+        "const gpio_spec_t led = GPIO_PIN_SPEC(gpioe, GPIO_PIN_DEFINE(6));\n"
+        "static const gpio_spec_t internal_led = {0};\n",
+    )
     make_omni_cmakelists(root)
     return app
 
@@ -134,7 +140,7 @@ def test_generate(root: Path) -> None:
         target="board1",
         log=lambda _message: None,
     )
-    dot_config = (app / ".config").read_text(encoding="utf-8")
+    dot_config = (app / "boards" / "board1" / "config" / ".config").read_text(encoding="utf-8")
     header = (app / "boards" / "board1" / "config" / "omni_config.h").read_text(encoding="utf-8")
     bsp = (app / "boards" / "board1" / "config" / "bsp_config.h").read_text(encoding="utf-8")
 
@@ -142,6 +148,97 @@ def test_generate(root: Path) -> None:
     check("写入 omni_config.h", "CONFIG_TEST_BOOL" in header or "CONFIG_APP_VALUE" in header, header[:200])
     check("写入 bsp_config.h", "extern const struct device _dev_demo;" in bsp, bsp)
     check("返回生成文件列表", len(result.generated) >= 3, str(result.generated))
+    check("声明板级导出对象", "extern const struct gpio_spec led;" in bsp, bsp)
+    check("板级对象按标签形式声明", "gpio_spec_t led" not in bsp, bsp)
+    check("跳过 static 板级对象", "internal_led" not in bsp, bsp)
+
+
+def test_config_dir(root: Path) -> None:
+    print("== 2b. --config-dir 生成物目录 ==")
+    app = root / "app"
+    cfg = app.resolve() / "build" / "cfg"
+
+    code, out, err = run_cli(
+        [
+            "config", "generate",
+            "--project-dir", str(app), "-b", "board1",
+            "--config-dir", "build/cfg",
+            "--json",
+        ]
+    )
+    data = json.loads(out)
+    check("--config-dir 生成成功", code == 0 and data["success"] is True,
+          (out + err)[:300])
+    check(
+        "JSON config_dir 指向该目录",
+        os.path.normcase(str(data.get("config_dir", ""))) == os.path.normcase(str(cfg)),
+        str(data.get("config_dir")),
+    )
+    for name in ("omni_config.h", "bsp_config.h", ".config", "kconfig_log.txt"):
+        check(f"生成物进 {name}", (cfg / name).exists(), str(cfg / name))
+    check("工程根不再有 .config", not (app / ".config").exists())
+    check("工程根不再有 kconfig_log.txt", not (app / "kconfig_log.txt").exists())
+    check("omni 根不残留临时 Kconfig", not list((root / "omni").glob("omni-app-*.Kconfig")))
+    check("config 目录不残留临时 Kconfig", not list(cfg.glob("omni-app-*.Kconfig")))
+
+    code, out, err = run_cli(
+        [
+            "config", "bsp", "--project-dir", str(app), "-b", "board1",
+            "--config-dir", "build/cfg", "--json",
+        ]
+    )
+    data = json.loads(out)
+    check(
+        "bsp 跟随 --config-dir",
+        code == 0 and os.path.normcase(data.get("bsp_config", ""))
+        == os.path.normcase(str(cfg / "bsp_config.h")),
+        (out + err)[:300],
+    )
+
+
+def test_menuconfig_persist(root: Path) -> None:
+    print("== 2c. menuconfig 回写 board.conf ==")
+    from omni_cli.config.generate import (
+        generate_project_config,
+        read_config_symbols,
+        write_menuconfig_block,
+    )
+    from omni_cli.config.menuconfig import save_menuconfig_changes
+
+    app = root / "app"
+    cfg = app.resolve() / "build" / "cfg"
+    generate_project_config(
+        project_dir=str(app), omni_root=str(root / "omni"), target="board1",
+        config_dir="build/cfg", clean_config=True, log=lambda _m: None,
+    )
+    dot = cfg / ".config"
+    before = read_config_symbols(str(dot))
+    dot.write_text(
+        dot.read_text(encoding="utf-8").replace("CONFIG_APP_VALUE=9", "CONFIG_APP_VALUE=5"),
+        encoding="utf-8",
+    )
+
+    board_conf, changed = save_menuconfig_changes(
+        project_dir=str(app), omni_root=str(root / "omni"), target="board1",
+        config_dir=str(cfg), before=before, log=lambda _m: None,
+    )
+    conf = Path(board_conf).read_text(encoding="utf-8")
+    check("改动写入 board.conf", "CONFIG_APP_VALUE=5" in conf, conf)
+    check("带受管块标记", ">>> omni menuconfig" in conf, conf)
+    check("只写改动的符号", "CONFIG_TEST_INT" not in conf, conf)
+    check("返回改动集合", changed.get("CONFIG_APP_VALUE") == "5", str(changed))
+
+    generate_project_config(
+        project_dir=str(app), omni_root=str(root / "omni"), target="board1",
+        config_dir="build/cfg", clean_config=True, log=lambda _m: None,
+    )
+    header = (cfg / "omni_config.h").read_text(encoding="utf-8")
+    check("下次 configure 保持改动", "CONFIG_APP_VALUE 5" in header, header[:300])
+
+    write_menuconfig_block(board_conf, {})
+    conf2 = Path(board_conf).read_text(encoding="utf-8")
+    check("清空改动后移除块", "omni menuconfig" not in conf2, conf2)
+    check("保留手写配置", "CONFIG_TEST_BOOL=y" in conf2, conf2)
 
 
 def make_uvprojx(path: Path, group: str = "omni/subsys") -> None:
@@ -265,6 +362,8 @@ def test_uvproj(root: Path) -> None:
         log=lambda _message: None,
     )
     write(dot_config, "# CONFIG_LOG is not set\n")
+    # CLI 不传 --config-dir 时读默认生成目录（boards/<board>/config/.config）
+    write(app / "boards" / "board1" / "config" / ".config", "# CONFIG_LOG is not set\n")
     code, out, _ = run_cli(
         [
             "config", "sync-keil",
@@ -289,6 +388,20 @@ def run_cli(argv: list[str]) -> tuple[int, str, str]:
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = args.func(args)
     return code, out.getvalue(), err.getvalue()
+
+
+def test_sync_keil_new_layout(root: Path) -> None:
+    print("== 3e. sync-keil 在新布局下找 .config ==")
+    app = root / "app"
+    code, out, err = run_cli(
+        ["config", "generate", "--project-dir", str(app), "-b", "board1", "--quiet"])
+    check("默认布局生成成功", code == 0, (out + err)[:200])
+    check(".config 落在 boards/<board>/config",
+          (app / "boards" / "board1" / "config" / ".config").exists())
+
+    code, out, err = run_cli(["config", "sync-keil", "--project-dir", str(app)])
+    text = out + err
+    check("sync-keil 不传 -b 也能找到 .config", "未找到 .config" not in text, text[:300])
 
 
 def test_removed_names() -> None:
@@ -333,6 +446,7 @@ def test_menuconfig_cleanup(root: Path) -> None:
         menuconfig_mod._find_menuconfig = original
 
     leftovers = list((root / "omni").glob("omni-app-*.Kconfig"))
+    leftovers += list((app / "boards" / "board1" / "config").glob("omni-app-*.Kconfig"))
     check("查找 menuconfig 失败时不残留临时 Kconfig", not leftovers, str(leftovers))
 
 
@@ -795,6 +909,8 @@ def main() -> int:
         app = make_tree(root)
         test_context(root)
         test_generate(root)
+        test_config_dir(root)
+        test_menuconfig_persist(root)
         test_uvproj(root)
         test_cmake_sources(root)
         test_module_sources(root)
@@ -805,6 +921,7 @@ def main() -> int:
         test_menuconfig_cleanup(root)
         test_cli(root)
         test_bsp_no_omni(root)
+        test_sync_keil_new_layout(root)
 
     print()
     if failures:

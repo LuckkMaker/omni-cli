@@ -3,6 +3,39 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.44.0（2026-11-24）
+
+- **menuconfig 改动会持久化**：`omni config menuconfig` 保存后，把它相对"生成前配置"的实际
+  改动写进 `boards/<board>/board.conf` 末尾的受管块（`# >>> omni menuconfig ... # <<<`），
+  随后按 `prj.conf` + `board.conf` 重新生成头文件。下一次 `omni config generate` 不会再丢掉
+  交互式改动。只写有 prompt 的符号（派生符号写进片段会让下次 configure 报错）；
+  `--no-save` 保留旧行为（只更新头文件，不回写）。
+- 新增 `--config-dir DIR`（`config` / `config generate` / `config menuconfig` /
+  `config bsp` / `config sync-keil` 通用）：把**全部生成物**写到一个目录——`omni_config.h`、
+  `bsp_config.h`、`.config`、`kconfig_log.txt`。相对路径按工程目录解析；缺省仍是
+  `boards/<board>/config`（cbuild / Keil 依赖该路径，保持兼容）。
+- `.config` 与 `kconfig_log.txt` 从工程根移入生成物目录：工程根不再因为一次 configure
+  多出两个文件。`omni config sync-keil` 会依次查找 `--config-dir`、`boards/<board>/config`、
+  工程根，旧布局仍可用。
+- 合成 Kconfig 的临时文件改写进生成物目录，且 `source` 用**绝对路径**：omni 作为只读
+  子模块（打包/容器）时也能配置，不再往 `omni/` 根写临时文件。
+- `config bsp --map` 标记为废弃并打印警告：`bsp_config.h` 只从源码扫描生成，链接 map
+  不再参与（0.43.0 起已如此，但参数此前被静默忽略）。
+- `config --json` 增加 `config_dir` 字段，便于脚本定位生成物。
+
+## 0.43.0（2026-11-23）
+
+- `config bsp` / `config generate` 生成的 `bsp_config.h` 现在同时声明**板级导出对象**：
+  板目录下非 `static` 的 `const <type>_spec_t <name> = ...`（如 `const gpio_spec_t led`）
+  生成 `extern const struct gpio_spec led;`。板级对象从此有编译期契约，应用不必再为
+  `led` / `key` 之类手写 `extern`；`static` 对象仍跳过（板内私有，如 `led0_spec`）。
+- 声明用结构体标签形式（`struct gpio_spec` 而不是 `gpio_spec_t`）：这个头由
+  `omni/config.h` 全局包含，可能早于驱动头，标签形式不依赖 typedef 与包含顺序。
+- 头文件 banner 改为说明真实来源（`omni config` 从板级源码生成），不再指向已迁走的
+  `omni/scripts/omni_bspgen.py`。
+- `bsp_config.h` 固定以 LF 写盘（与 `uvproj_sync` / `modules` 的生成物一致）：此前在 Windows
+  上写 CRLF，与仓库里的 LF blob 不符，每次生成都会整文件改动。
+
 ## 0.42.0（2026-11-20）
 
 - `config generate --msp` 标记为废弃：生成的 `driver_msp_config.h` 在本仓无任何驱动 include，

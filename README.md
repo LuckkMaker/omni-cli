@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.41.0**（烧录阶段耗时与擦除模式 / 抓包树补 IAD 与字符串 / 后端启动自检）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.43.0**（bsp_config.h 声明板级导出对象 / 链接 map 按镜像名区分 / 烧录阶段耗时与擦除模式）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 

@@ -56,6 +56,9 @@ def config_parser() -> argparse.ArgumentParser:
                    help="omni 框架根目录（默认从工程目录向上查找）")
     p.add_argument("-b", "--board", default=None, metavar="BOARD",
                    help="板级目标名（如 stm32f407ig）")
+    p.add_argument("--config-dir", default=None, metavar="DIR",
+                   help="生成物目录（omni_config.h/bsp_config.h/.config/kconfig_log.txt）；"
+                        "相对路径按工程目录解析；默认 boards/<board>/config")
     p.add_argument("--json", dest="json_", action="store_true", default=False,
                    help="输出 JSON（供脚本/CI 消费）")
     p.add_argument("--quiet", action="store_true", default=False,

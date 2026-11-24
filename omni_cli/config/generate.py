@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import glob
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, TextIO
@@ -20,6 +21,7 @@ class ConfigResult:
     project_dir: str
     omni_root: str
     target: str
+    config_dir: str = ""
     generated: list[str] = field(default_factory=list)
     uvprojx_changed: bool = False
     uvprojx_files: list[str] = field(default_factory=list)
@@ -57,31 +59,169 @@ def resolve_project_kconfig(project_dir: str) -> Optional[str]:
     return project_kconfig if os.path.exists(project_kconfig) else None
 
 
-def create_combined_kconfig(omni_root: str, project_dir: str) -> tuple[str, Optional[str]]:
-    """把应用 Kconfig 挂到 omni 主 Kconfig 树；返回 (kconfig_file, project_kconfig)。"""
+def resolve_config_dir(project_dir: str, target: str, config_dir: Optional[str] = None) -> str:
+    """解析生成物目录。
+
+    ``config_dir`` 为空时沿用 ``<project>/boards/<target>/config``（cbuild / Keil 依赖
+    该路径，保持兼容）；相对路径按工程目录解析，与 ``--uvprojx`` 的口径一致。
+    """
+
+    if config_dir:
+        if not os.path.isabs(config_dir):
+            config_dir = os.path.join(project_dir, config_dir)
+        return os.path.abspath(config_dir)
+    return os.path.abspath(os.path.join(project_dir, "boards", target, "config"))
+
+
+def _kconfig_abs(path: str) -> str:
+    """Kconfig ``source`` 用绝对路径，避免依赖 cwd / $srctree。"""
+
+    return os.path.abspath(path).replace("\\", "/")
+
+
+# --------------------------------------------------------------------------- #
+# menuconfig 回写：把交互式改动落到 board.conf 的受管块里
+# --------------------------------------------------------------------------- #
+MENUCONFIG_BEGIN = "# >>> omni menuconfig（本块由 omni config menuconfig 生成，勿手改）"
+MENUCONFIG_END = "# <<< omni menuconfig"
+
+
+def read_config_symbols(path: str) -> dict[str, str]:
+    """读 ``.config`` / ``*.conf``：返回 ``{CONFIG_X: value}``，未启用记为 ``n``。"""
+
+    values: dict[str, str] = {}
+    try:
+        handle = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return values
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                match = re.match(r"#\s*(CONFIG_[A-Za-z0-9_]+)\s+is not set$", line)
+                if match:
+                    values[match.group(1)] = "n"
+                continue
+            match = re.match(r"(CONFIG_[A-Za-z0-9_]+)=(.*)$", line)
+            if match:
+                values[match.group(1)] = match.group(2)
+    return values
+
+
+def _strip_menuconfig_block(text: str) -> str:
+    out: list[str] = []
+    skipping = False
+    for line in text.split("\n"):
+        if line.startswith(MENUCONFIG_BEGIN):
+            skipping = True
+            continue
+        if skipping:
+            if line.startswith(MENUCONFIG_END):
+                skipping = False
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def write_menuconfig_block(conf_path: str, values: dict[str, str]) -> bool:
+    """把 ``values`` 写成 ``conf_path`` 末尾的受管块（先删旧块）；返回是否改动。
+
+    ``values`` 为空表示清空旧块（用户把改动改回去了）。
+    """
+
+    raw = ""
+    if os.path.exists(conf_path):
+        with open(conf_path, "rb") as handle:
+            raw = handle.read().decode("utf-8", errors="replace")
+    crlf = "\r\n" in raw
+    text = raw.replace("\r\n", "\n")
+    stripped = _strip_menuconfig_block(text)
+
+    if values:
+        lines = [MENUCONFIG_BEGIN]
+        for name in sorted(values):
+            value = values[name]
+            lines.append(f"# {name} is not set" if value == "n" else f"{name}={value}")
+        lines.append(MENUCONFIG_END)
+        separator = "\n\n" if stripped.strip() else ""
+        new_text = stripped.rstrip("\n") + separator + "\n".join(lines) + "\n"
+    else:
+        new_text = stripped.rstrip("\n") + "\n" if stripped.strip() else ""
+
+    if new_text == text:
+        return False
+    if crlf:
+        new_text = new_text.replace("\n", "\r\n")
+    directory = os.path.dirname(conf_path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(conf_path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(new_text)
+    return True
+
+
+def filter_user_settable(
+    kconfig_file: str,
+    values: dict[str, str],
+    srctree: Optional[str] = None,
+) -> dict[str, str]:
+    """丢掉没有 prompt 的派生符号——它们不能出现在手写配置片段里。"""
+
+    from kconfiglib import Kconfig
+
+    saved = os.environ.get("srctree")
+    if srctree:
+        os.environ["srctree"] = srctree
+    try:
+        kconf = Kconfig(kconfig_file, warn_to_stderr=False, suppress_traceback=True)
+    finally:
+        if srctree:
+            if saved is None:
+                os.environ.pop("srctree", None)
+            else:
+                os.environ["srctree"] = saved
+    kept: dict[str, str] = {}
+    for name, value in values.items():
+        # kconfiglib 的 syms 键是 Kconfig 里的符号名（无 CONFIG_ 前缀）
+        symbol = kconf.syms.get(name[7:] if name.startswith("CONFIG_") else name)
+        if symbol is None:
+            continue
+        if not any(node.prompt for node in symbol.nodes):
+            continue
+        kept[name] = value
+    return kept
+
+
+def create_combined_kconfig(
+    omni_root: str,
+    project_dir: str,
+    tmp_dir: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """把应用 Kconfig 挂到 omni 主 Kconfig 树；返回 (kconfig_file, project_kconfig)。
+
+    临时文件默认写在 ``omni_root``（历史行为），传入 ``tmp_dir`` 时改写在那里——
+    omni 是只读子模块时仍可配置。
+    """
 
     project_kconfig = resolve_project_kconfig(project_dir)
     default_kconfig = os.path.join(omni_root, "Kconfig")
     if not project_kconfig:
         return default_kconfig, None
 
-    project_kconfig_rel = os.path.relpath(
-        os.path.abspath(project_kconfig),
-        os.path.abspath(omni_root),
-    ).replace("\\", "/")
-
     temp_file = tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
         suffix=".Kconfig",
         prefix="omni-app-",
-        dir=omni_root,
+        dir=tmp_dir or omni_root,
         delete=False,
     )
     with temp_file as handle:
         handle.write('mainmenu "OMNI Configuration"\n\n')
-        handle.write('source "Kconfig.omni"\n')
-        handle.write(f'source "{project_kconfig_rel}"\n')
+        handle.write(f'source "{_kconfig_abs(os.path.join(omni_root, "Kconfig.omni"))}"\n')
+        handle.write(f'source "{_kconfig_abs(project_kconfig)}"\n')
     return temp_file.name, project_kconfig
 
 
@@ -130,6 +270,7 @@ def generate_project_config(
     rules_mode: str = "auto",
     uvprojx_paths: Optional[Iterable[str]] = None,
     clean_config: bool = True,
+    config_dir: Optional[str] = None,
     log: Optional[Callable[[str], None]] = None,
     err: TextIO = None,
 ) -> ConfigResult:
@@ -146,7 +287,6 @@ def generate_project_config(
     log = log or (lambda message: print(message))
     err = err or sys.stderr
     result = ConfigResult(project_dir=project_dir, omni_root=omni_root, target=target)
-
     def emit(message: str) -> None:
         result.log_lines.append(message)
         log(message)
@@ -160,11 +300,12 @@ def generate_project_config(
             code=1,
         )
 
-    config_dir = os.path.join(project_dir, "boards", target, "config")
+    config_dir = resolve_config_dir(project_dir, target, config_dir)
     os.makedirs(config_dir, exist_ok=True)
-    dot_config = os.path.join(project_dir, ".config")
+    result.config_dir = config_dir
+    dot_config = os.path.join(config_dir, ".config")
     header_out = os.path.join(config_dir, "omni_config.h")
-    log_file = os.path.join(project_dir, "kconfig_log.txt")
+    log_file = os.path.join(config_dir, "kconfig_log.txt")
 
     if clean_config:
         _clean_old_config(dot_config)
@@ -173,7 +314,8 @@ def generate_project_config(
         with open(dot_config, "w", encoding="utf-8") as handle:
             handle.write("# Initial config\n")
 
-    kconfig_file, project_kconfig = create_combined_kconfig(omni_root, project_dir)
+    kconfig_file, project_kconfig = create_combined_kconfig(
+        omni_root, project_dir, tmp_dir=config_dir)
     default_kconfig = os.path.join(omni_root, "Kconfig")
 
     emit("----------------------------------------------------------------")
@@ -219,7 +361,8 @@ def generate_project_config(
         try:
             from . import bspgen
 
-            bsp_file = bspgen.run_bspgen(project_dir, target, log=emit)
+            bsp_file = bspgen.run_bspgen(project_dir, target, log=emit,
+                                        config_dir=config_dir)
             if bsp_file:
                 result.generated.append(bsp_file)
         except Exception as exc:  # 保持 omni_config.py 的“警告但不中断”行为
@@ -261,6 +404,7 @@ def generate_after_menuconfig(
     omni_root: str,
     target: str,
     no_bsp: bool = False,
+    config_dir: Optional[str] = None,
     log: Optional[Callable[[str], None]] = None,
     err: TextIO = None,
 ) -> ConfigResult:
@@ -272,6 +416,7 @@ def generate_after_menuconfig(
         target=target,
         no_bsp=no_bsp,
         clean_config=False,
+        config_dir=config_dir,
         log=log,
         err=err,
     )

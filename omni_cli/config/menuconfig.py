@@ -8,10 +8,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from ..context import ProjectError
-from .generate import create_combined_kconfig
+from .generate import create_combined_kconfig, resolve_config_dir
 
 MENUCONFIG_STYLE = (
     "default path=fg:black,bg:white separator=fg:white,bg:blue,bold "
@@ -39,20 +39,74 @@ def _find_menuconfig() -> list[str]:
     )
 
 
+def save_menuconfig_changes(
+    *,
+    project_dir: str,
+    omni_root: str,
+    target: str,
+    config_dir: str,
+    before: dict[str, str],
+    log: Callable[[str], None] = print,
+) -> tuple[str, dict[str, str]]:
+    """把本次 menuconfig 的实际改动写回 ``boards/<target>/board.conf``。
+
+    只写「相对 menuconfig 之前的有效配置发生变化」的符号，并且丢掉没有 prompt 的
+    派生符号（否则下次 ``omni config generate`` 会因为"不可直接配置"而报错）。
+    """
+
+    from .generate import (
+        create_combined_kconfig,
+        filter_user_settable,
+        read_config_symbols,
+        write_menuconfig_block,
+    )
+
+    dot_config = os.path.join(config_dir, ".config")
+    after = read_config_symbols(dot_config)
+
+    changed: dict[str, str] = {}
+    for name in set(before) | set(after):
+        old = before.get(name)
+        new = after.get(name, "n")
+        if new != old:
+            changed[name] = new
+
+    if changed:
+        kconfig_file, _ = create_combined_kconfig(omni_root, project_dir, tmp_dir=config_dir)
+        try:
+            changed = filter_user_settable(kconfig_file, changed, srctree=omni_root)
+        finally:
+            default_kconfig = os.path.join(omni_root, "Kconfig")
+            if kconfig_file != default_kconfig and os.path.exists(kconfig_file):
+                try:
+                    os.remove(kconfig_file)
+                except OSError:
+                    pass
+
+    board_conf = os.path.join(project_dir, "boards", target, "board.conf")
+    if write_menuconfig_block(board_conf, changed):
+        log(f"menuconfig: {len(changed)} 项改动写入 {board_conf}")
+    else:
+        log("menuconfig: 配置未变化，board.conf 保持不变")
+    return board_conf, changed
+
+
 def run_menuconfig(
     *,
     project_dir: str,
     omni_root: str,
     target: str,
+    config_dir: Optional[str] = None,
     log: Callable[[str], None] = print,
 ) -> int:
     """打开 menuconfig；返回子进程退出码。"""
 
-    config_dir = os.path.join(project_dir, "boards", target, "config")
+    config_dir = resolve_config_dir(project_dir, target, config_dir)
     os.makedirs(config_dir, exist_ok=True)
-    dot_config = os.path.join(project_dir, ".config")
+    dot_config = os.path.join(config_dir, ".config")
 
-    kconfig_file, project_kconfig = create_combined_kconfig(omni_root, project_dir)
+    kconfig_file, project_kconfig = create_combined_kconfig(
+        omni_root, project_dir, tmp_dir=config_dir)
     default_kconfig = os.path.join(omni_root, "Kconfig")
 
     env = os.environ.copy()
