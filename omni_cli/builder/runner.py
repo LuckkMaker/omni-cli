@@ -21,6 +21,7 @@ from typing import Callable, Optional
 
 from .. import __version__, toolchain as omni_toolchain
 from ..context import ProjectError
+from .memory import collect_regions
 from .report import steps_from_log, summarize_failure
 
 COMPILERS = ("ac6", "gcc", "clang", "ac5")
@@ -83,6 +84,8 @@ class BuildResult:
     artifacts: dict = field(default_factory=dict)
     size: Optional[dict] = None
     gnu_size: Optional[dict] = None
+    #: 链接脚本里的内存区域（FLASH/RAM/... 的已用/上限），用于画占用进度条。
+    memory_regions: list = field(default_factory=list)
     log: list = field(default_factory=list)
     #: 展示信息：耗时、日志落盘位置、失败统计（``--json`` 也会带出去）。
     configure_seconds: float = 0.0
@@ -110,6 +113,7 @@ class BuildResult:
             "artifacts": self.artifacts,
             "size": self.size,
             "gnu_size": self.gnu_size,
+            "memory_regions": [region.as_dict() for region in self.memory_regions],
             "configure_seconds": round(self.configure_seconds, 2),
             "build_seconds": round(self.build_seconds, 2),
             "log_path": self.log_path,
@@ -244,7 +248,8 @@ def target_kind(target: Optional[str], project_dir: str) -> tuple:
     kind：
       ``none``   没有指定目标
       ``clean``  等价 --clean
-      ``cmake``  直接透传给 ``cmake --build --target``（含 ``size`` 的展开）
+      ``size``   构建后跑 size（真实目标名要等 configure 后从 build.ninja 查）
+      ``cmake``  直接透传给 ``cmake --build --target``
       ``runner`` 先构建，再调用 runner（flash / run）
     """
 
@@ -253,11 +258,46 @@ def target_kind(target: Optional[str], project_dir: str) -> tuple:
     if target == TARGET_CLEAN:
         return "clean", ""
     if target == TARGET_SIZE:
-        name = os.path.basename(os.path.abspath(project_dir))
-        return "cmake", f"omni-size-{name}"
+        return "size", ""
     if target in RUNNER_ACTIONS:
         return "runner", ""
     return "cmake", target
+
+
+#: build.ninja 里 ``omni_configure_output`` 注册的 size 目标。
+SIZE_TARGET_RE = re.compile(r"^build (omni-size-\S+?):", re.MULTILINE)
+
+
+def resolve_size_target(build_dir: str, project_dir: str) -> str:
+    """``-t size`` 对应的 cmake 目标名。
+
+    ``omni-size-<target>`` 里的 ``<target>`` 是 CMake 可执行目标名，不一定是
+    工程目录名（示例工程是 ``project(template)`` + ``add_executable(app)``），
+    所以从 configure 生成的 build.ninja 里查实际目标；查不到再退回旧约定。
+    """
+
+    default = f"omni-size-{os.path.basename(os.path.abspath(project_dir))}"
+    try:
+        with open(os.path.join(build_dir, "build.ninja"), encoding="utf-8",
+                  errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return default
+    names: list = []
+    for name in SIZE_TARGET_RE.findall(text):
+        if name not in names:
+            names.append(name)
+    if not names:
+        return default
+    if default in names:
+        return default
+    if len(names) == 1:
+        return names[0]
+    raise ProjectError(
+        "工程里有多个 size 目标，无法确定用哪个：" + "、".join(sorted(names))
+        + "（用 -t <cmake target> 明确指定）",
+        code=1,
+    )
 
 
 def runner_argv(action: str, elf_path: str, extra_args: Optional[list] = None) -> list:
@@ -529,6 +569,10 @@ def run_build(
             result.success = True
             return _finalize(result)
 
+        if kind == TARGET_SIZE:
+            # size 目标名由 CMake 可执行目标决定，configure 之后才查得到。
+            cmake_target = resolve_size_target(build_dir, project_dir)
+
         build_cmd = [cmake, "--build", build_dir]
         if cmake_target:
             build_cmd += ["--target", cmake_target]
@@ -548,6 +592,13 @@ def run_build(
         result.artifacts = collect_artifacts(build_dir)
         result.size = parse_size(os.path.join(build_dir, map_file(compiler)))
         result.gnu_size = parse_gnu_size(os.path.join(build_dir, "omni.size.txt"))
+        result.memory_regions = collect_regions(
+            compiler,
+            os.path.join(build_dir, map_file(compiler)),
+            "\n".join(result.log),
+            elf_path=result.artifacts.get("omni.elf") or result.artifacts.get("omni.axf") or "",
+            build_dir=build_dir,
+        )
         result.success = True
         return _finalize(result)
     finally:

@@ -12,6 +12,7 @@ import re
 import sys
 
 from ..formatting import BOLD, CYAN, DIM, GRAY, GREEN, RED, YELLOW, Palette
+from . import memory as memory_view
 
 STEP_RE = re.compile(r"^\s*\[(\d+)/(\d+)\]\s*(.*)$")
 FAILED_RE = re.compile(r"^FAILED:\s*(\S.*?)\s*$")
@@ -127,6 +128,8 @@ class BuildReporter:
         self.project_dir = project_dir
         self.build_dir = build_dir
         self.root = root
+        #: 链接器的 ``--print-memory-usage`` 原始块正在吞（结尾会改画进度条）。
+        self._in_memory_block = False
 
     # ------------------------------------------------------------ 头部
 
@@ -166,7 +169,25 @@ class BuildReporter:
     # ------------------------------------------------------------ 实时日志
 
     def line(self, raw: str) -> None:
+        if self._swallow_memory_block(raw):
+            return
         print(self.style_line(raw), flush=True)
+
+    def _swallow_memory_block(self, raw: str) -> bool:
+        """吞掉链接器 ``--print-memory-usage`` 的原始块。
+
+        它的排版是「表头 + 每行前后各一个空行」，直接转发很难看；结尾的
+        ``success`` 会用同一份数据画进度条。原文仍保留在 build.log 里。
+        """
+
+        if memory_view.is_usage_header(raw):
+            self._in_memory_block = True
+            return True
+        if self._in_memory_block:
+            if memory_view.is_usage_line(raw):
+                return True
+            self._in_memory_block = False
+        return False
 
     def style_line(self, raw: str) -> str:
         p = self.palette
@@ -200,6 +221,9 @@ class BuildReporter:
         print(f"{p(title, GREEN, BOLD)}{steps}  {seconds:.1f}s")
 
         width = max([len(name) for name in result.artifacts] + [4])
+        for line in memory_view.render_regions(result.memory_regions, p):
+            print(f"  {line}")
+        # 区域进度条之上仍保留段级细账（Code/RO-data/RW-data/ZI-data 或 text/data/bss）。
         if result.size:
             size = result.size
             print(

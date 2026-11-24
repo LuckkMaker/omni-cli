@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.43.0**（bsp_config.h 声明板级导出对象 / 链接 map 按镜像名区分 / 烧录阶段耗时与擦除模式）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.45.1**（build 打印内存区域占用进度条 / bsp_config.h 声明板级导出对象 / 链接 map 按镜像名区分）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 
@@ -420,8 +420,13 @@ cd D:\workspace\embedded\omni-emb
 omni build -b stm32f407ig --project-dir examples\basic\template
 omni build -b stm32f407ig --project-dir examples\basic\template --clean
 omni build -b stm32f407ig --project-dir examples\basic\template --configure-only
+omni build -b stm32f407ig --project-dir examples\basic\template -t size
 omni build -b stm32f407ig --project-dir examples\basic\template --json
 ```
+
+`-t size` 会先构建再跑工程的 size 工具（GCC/CLANG 是 `arm-none-eabi-size` / `llvm-size`，
+AC6/AC5 是 `fromelf`），随后同样打印内存区域进度条。目标名由 configure 生成的
+`build.ninja` 解析（`omni-size-<CMake 可执行目标>`），不要求可执行目标名等于工程目录名。
 
 输出分三段（日志本身仍是实时逐行转发）：
 
@@ -435,10 +440,18 @@ configure  cmake -S . -B .\build\stm32f407ig\AC6\Debug -G Ninja
 build      cmake --build .\build\stm32f407ig\AC6\Debug
 
 构建完成  129 步  1.2s
-  size     Code=6138  RO-data=582  RW-data=12  ZI-data=1652
+  FLASH  [#...................]  6544 B /   1 MB   0.62%
+  RAM    [#...................]  1064 B / 128 KB   0.81%
+  size          Code=5946  RO-data=582  RW-data=12  ZI-data=1052
   omni.axf ...\omni.axf
   log      ...\build.log
 ```
+
+结尾的内存区域行按链接脚本里的区域算（GCC/CLANG 用 `--print-memory-usage`、
+AC6/AC5 用 armlink map），`[#...]` 是 20 格的占用条，右侧是「已用 / 上限 / 百分比」。
+`size` 行仍是段级细账（AC6/AC5 是 `Code=`/`RO-data=`/…，GCC/CLANG 是 `text=`/`data=`/`bss=`）；
+`--json` 里对应 `memory_regions` 字段。链接器自带的 `Memory region ...` 原始块不再逐行转发
+（原文在 `build.log`）。
 
 失败时只给结论，不再重打日志：
 
@@ -449,7 +462,7 @@ build      cmake --build .\build\stm32f407ig\AC6\Debug
 ```
 
 原始日志（无 ANSI 转义）始终写到 `<build-dir>/build.log`，`--json` 里也有
-`log`、`first_error`、`failed_targets` 等字段。
+`log`、`first_error`、`failed_targets`、`memory_regions` 等字段。
 
 ### `toolchain` — 工具解析（本地命令）
 
