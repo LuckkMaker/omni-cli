@@ -9,3 +9,6 @@ dist/
 .backend_runtime.json
 .backend.handshake.jsonl
 cli.config.json
+
+# Mnemon 运行时记忆（本机状态，不入库）
+.mnemon/
