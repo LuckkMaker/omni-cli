@@ -276,17 +276,35 @@ def format_report(report: dict) -> list:
     return lines
 
 
-def report_kind(target: Optional[str]) -> Optional[str]:
-    """``-t`` 的值是体积报告目标时返回 ``rom`` / ``ram``。"""
+#: ``-t`` 里可用的体积报告写法 -> 展开的报告种类
+_REPORT_ALIASES = {
+    "rom-report": ["rom"],
+    "ram-report": ["ram"],
+    "footprint": ["rom", "ram"],
+    "report": ["rom", "ram"],
+}
+
+
+def report_kinds(target: Optional[str]) -> Optional[list]:
+    """把 ``-t`` 的值解析成体积报告列表；不是报告目标时返回 ``None``。
+
+    支持逗号组合（``rom-report,ram-report``）和一键两用（``footprint``）。
+    只要有一个片段不认识，就整体当作 cmake 目标透传，避免静默吞掉拼写错误。
+    """
 
     if not target:
         return None
-    value = target.replace("_", "-").lower()
-    if value == "rom-report":
-        return "rom"
-    if value == "ram-report":
-        return "ram"
-    return None
+    kinds: list = []
+    for token in target.split(","):
+        value = token.strip().replace("_", "-").lower()
+        if not value:
+            continue
+        if value not in _REPORT_ALIASES:
+            return None
+        for kind in _REPORT_ALIASES[value]:
+            if kind not in kinds:
+                kinds.append(kind)
+    return kinds or None
 
 
 def _drop_overlapping_sections(symbols: list) -> list:

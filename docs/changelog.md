@@ -3,6 +3,13 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.48.0（2026-11-24）
+
+- `-t footprint` 一次给出 ROM 与 RAM 两份符号级报告；也可以逗号组合
+  （`-t rom-report,ram-report`）。`--json` 的 `footprint` 变成按种类索引的对象
+  （`{"rom": {...}, "ram": {...}}`）。
+- `report_kinds` 对拼错的目标整体退化为 cmake 目标透传，不会静默吞掉。
+
 ## 0.47.0（2026-11-24）
 
 - 新增 `omni build -t rom-report` / `-t ram-report`：构建成功后按**符号**打印 ROM / RAM 占用

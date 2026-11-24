@@ -16,7 +16,7 @@ import sys
 PY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PY_DIR)
 
-from omni_cli.builder.footprint import build_report, format_report, report_kind
+from omni_cli.builder.footprint import build_report, format_report, report_kinds
 
 failures: list[str] = []
 
@@ -98,11 +98,15 @@ def test_parser(tmp: str) -> None:
 
 def test_targets() -> None:
     print("== 2. -t 目标名解析 ==")
-    check("rom-report", report_kind("rom-report") == "rom")
-    check("ram_report 别名", report_kind("ram_report") == "ram")
-    check("大小写不敏感", report_kind("ROM-REPORT") == "rom")
-    check("普通目标不是报告", report_kind("size") is None)
-    check("空值不报错", report_kind(None) is None)
+    check("rom-report", report_kinds("rom-report") == ["rom"])
+    check("ram_report 别名", report_kinds("ram_report") == ["ram"])
+    check("大小写不敏感", report_kinds("ROM-REPORT") == ["rom"])
+    check("footprint 一次给两块", report_kinds("footprint") == ["rom", "ram"])
+    check("逗号组合", report_kinds("rom-report,ram-report") == ["rom", "ram"])
+    check("逗号去重", report_kinds("rom-report,rom_report") == ["rom"])
+    check("普通目标不是报告", report_kinds("size") is None)
+    check("拼错不透传成报告", report_kinds("rom-reportty") is None)
+    check("空值不报错", report_kinds(None) is None)
 
 
 def main() -> int:
