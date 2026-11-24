@@ -16,6 +16,7 @@ import os
 import sys
 
 from .. import context
+from ..builder.footprint import build_report, format_report, report_kind
 from ..builder.report import BuildReporter
 from ..builder.runner import (
     BUILD_TYPES,
@@ -49,7 +50,8 @@ def add_parser(sub):
     p.add_argument("--configure-only", action="store_true", default=False,
                    help="只做 CMake 配置，不编译")
     p.add_argument("-t", "--target", default=None, metavar="TARGET",
-                   help="size | clean | flash | run | <cmake target>；flash/run 构建后调用 runner")
+                   help="size | clean | flash | run | rom-report | ram-report | <cmake target>；"
+                        "flash/run 构建后调用 runner；rom/ram-report 构建后按符号打印体积占用")
     p.add_argument("--runner-arg", dest="runner_args", action="append", default=None,
                    metavar="ARG", help="额外传给 runner（omni flash program）的参数（可重复）")
     p.add_argument("-o", "--cmake-arg", dest="cmake_args", action="append", default=None,
@@ -119,6 +121,10 @@ def _build(args) -> int:
         reporter.info(f"omni root: {ctx.omni_root}")
         reporter.info("omni CLI : " + " ".join(_cli_base()))
 
+    # 体积报告只是"构建完再分析"，不交给 cmake/ninja 当目标。
+    footprint = report_kind(args.target)
+    build_target = None if footprint else args.target
+
     result = run_build(
         project_dir=ctx.project_dir,
         omni_root=ctx.omni_root,
@@ -128,7 +134,7 @@ def _build(args) -> int:
         clean=args.clean,
         force_configure=args.cmake,
         configure_only=args.configure_only,
-        target=args.target,
+        target=build_target,
         jobs=args.jobs,
         cmake_args=args.cmake_args,
         verbose=args.verbose,
@@ -151,6 +157,17 @@ def _build(args) -> int:
 
     if not getattr(args, "quiet", False) and not getattr(args, "json_", False):
         reporter.success(result, configure_only=args.configure_only)
+
+    if footprint:
+        elf = result.artifacts.get("omni.axf") or result.artifacts.get("omni.elf")
+        if not elf:
+            raise ProjectError(
+                f"-t {args.target} 需要 omni.axf 或 omni.elf，但构建产物里没有", code=1)
+        data = build_report(elf, footprint)
+        payload["footprint"] = data
+        if not getattr(args, "quiet", False) and not getattr(args, "json_", False):
+            for line in format_report(data):
+                reporter.info(line)
 
     # runner 目标（flash / run）：构建完成后调用 omni flash program。
     if result.runner:

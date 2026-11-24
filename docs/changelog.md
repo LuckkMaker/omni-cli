@@ -3,6 +3,14 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.47.0（2026-11-24）
+
+- 新增 `omni build -t rom-report` / `-t ram-report`：构建成功后按**符号**打印 ROM / RAM 占用
+  （前 20 个符号 + 其余合计 + 未归入符号的栈/堆/对齐），`--json` 里对应 `footprint` 字段。
+  实现直接解析 ELF 的符号表，AC6 的 `omni.axf` 与 GCC/CLANG 的 `omni.elf` 同一套代码，
+  不依赖 `nm`/`fromelf`，也不需要链接器 map 里的分目标尺寸表。
+- `-t` 的其它值仍按原样透传给 `cmake --build --target`（如 `-t <自定义 ninja 目标>`）。
+
 ## 0.46.0（2026-11-24）
 
 - `config generate` 额外输出 `<config-dir>/kconfig_sources.txt`：本次**实际解析到的**
