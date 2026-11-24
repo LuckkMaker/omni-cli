@@ -1,6 +1,6 @@
 ---
 name: "omni-cli"
-description: "用 omni CLI（omni-cli 0.43.0+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
+description: "用 omni CLI（omni-cli 0.48.0+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
 ---
 
 # OMNI CLI 实机联调
@@ -23,13 +23,13 @@ description: "用 omni CLI（omni-cli 0.43.0+）在真实硬件上联调：经�
 
 | 项 | 本机实测值 |
 |----|-----------|
-| CLI | `omni 0.43.0`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
+| CLI | `omni 0.48.0`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
 | 安装位置 | wheel：`powershell -File scripts\cli-package.ps1`（在 omni-cli 仓）；源码态用 `python -m omni_cli`（`PYTHONPATH` 指向 omni-cli 仓） |
 | 后端 | 独立仓库 `D:\workspace\embedded\omni-backend`，两个服务：`link`（探针/烧录/RTT/调试）与 `bus`（串口/网络/USB）；源码态 `link/server.py`、`bus/server.py` |
 | 后端接入 | 常驻 `omni backend start [link\|bus]` / `--managed`（临时拉起）/ `--backend-port`（接管已有） |
 | Python | 3.11（技能脚本只用标准库，`python` 在 PATH 即可） |
 | 探针 | SEGGER J-Link Compact PLUS（UID `852001270`）；Geehy CMSIS-DAP（DAPLink，`VID_314B&PID_0101`） |
-| 目标 | STM32F407IG → `--target stm32f407xg`，`--jlink-device STM32F407IG`；APM32F407 → `--target apm32f407xg` |
+| 目标 | STM32F407IG → `--target stm32f407xg` / `--jlink-device STM32F407IG`；G32F463RC → `--target g32f463xc` / `--jlink-device G32F463xC`；APM32F407 → `--target apm32f407xg` |
 | 固件 | `Objects\stm32f407\omni.hex` / `omni.axf`（Keil）或 `build\stm32f407ig\AC6\Debug\`（CMake） |
 | USB 抓包 | USBPcap 1.5.4+（默认 `D:\Program Files\USBPcap`）；`capture start` 需要**管理员终端** |
 | USB 设备 | `examples/usb/usbd_winusb`（C251:0002）、`usbd_hid_custom`（C251:0001）、`usbd_cdc_acm`（C251:0001→COMx） |
@@ -47,6 +47,7 @@ omni toolchain          # cmake/ninja/编译器最终解析来源
 > [!IMPORTANT]
 > `--jlink-device` 是 **SEGGER 数据库里的设备名**，和 CMSIS-Pack 的型号字符串不一定相同（本机 STM32F407 恰好同名，换芯片时用 `omni probe jlink-devices --search <前缀>` 查）。
 > `probe connect` 的 `--target` 是必填项（调试/烧录的芯片型号），与本地命令 `-b/--board`（构建目标板）不是一回事。
+> 换芯片先查两处名字，别照抄板名：`omni device list --search <型号>` 给 `--target`（小写、可带 `x` 通配，如 `g32f463xc`），`omni probe jlink-devices --search <前缀>` 给 `--jlink-device`（SEGGER 写法，如 `G32F463xC`）。板级目录名 `g32f463rc` 只是 `-b` 的构建名，两处都不能用。
 
 ## 开发循环（改 CLI / 后端时）
 
@@ -85,6 +86,7 @@ python -m omni_cli usb capture transfers --follow
 ```powershell
 omni backend start                    # 默认 link 服务
 omni probe connect 852001270 --target stm32f407xg --jlink-device STM32F407IG --speed 4000000
+omni probe connect 150710717 --target g32f463xc --jlink-device G32F463xC --speed 4000000
 omni flash program .\Objects\stm32f407\omni.hex --json
 omni rtt start
 omni rtt read --follow --duration 5 --json
@@ -127,12 +129,48 @@ omni build -b stm32f407ig --project-dir examples\basic\template -t flash
 
 | 区域 | 命令 |
 |------|------|
-| 工程配置 | `config generate\|menuconfig\|bsp\|sync-keil` |
-| 构建 | `build -b <board> [-c ac6\|gcc\|clang\|ac5] [-t size\|clean\|flash\|run]` |
+| 工程配置 | `config generate\|menuconfig\|bsp\|sync-keil`（都可带 `--config-dir DIR`；menuconfig 会把改动回写 `board.conf`） |
+| 构建 | `build -b <board> [-c ac6\|gcc\|clang\|ac5] [-t size\|clean\|flash\|run\|rom-report\|ram-report\|<cmake target>]` |
 | 板定义 | `boards list\|show\|check\|sync` |
 | 模块注册表 | `modules list\|check\|generate [--check]` |
 | 工具链 | `toolchain [--json]` |
 | 文件 | `file checksum <file>`（纯本地）、`tool map <file.map>` |
+
+### 构建产物与体积
+
+配置生成物都在构建目录里，源码树只留 `prj.conf` / `board.conf` / `Kconfig`：
+
+| 入口 | 生成目录 |
+|------|----------|
+| `omni build` | `build/<board>/<compiler>/<type>/config/`（`omni_config.h`、`bsp_config.h`、`.config`、`kconfig_log.txt`、`kconfig_sources.txt`） |
+| `cbuild` / Keil | `build/cbuild/<board>/` |
+
+`omni build` 结束会打印内存区域占用（20 格 ASCII 条 + 已用/上限/百分比），区域名来自
+链接脚本；`--json` 里是 `memory_regions`：
+
+```text
+构建完成  18 步  3.0s
+  FLASH  [##..................]  30176 B / 256 KB  11.51%
+  RAM    [#...................]   9192 B / 128 KB   7.01%
+  size          Code=29052 RO-data=1004 RW-data=116 ZI-data=9076
+```
+
+条下面的 `size` 行是段级细账（AC6 `Code=`/`RO-data=`/…，GCC/CLANG `text=`/`data=`/`bss=`）；
+增量构建没有重新链接时，区域值由 map 的段地址求和或上一次链接的缓存得出。
+`-t size` 先构建再跑 size 工具，同样打印这几行。
+
+按**符号**看体积（0.47.0+；构建完成后分析，不占用构建目标）：
+
+```powershell
+omni build -b stm32f407ig --project-dir examples\basic\template -t footprint          # ROM + RAM 两份
+omni build -b stm32f407ig --project-dir examples\basic\template -t rom-report
+omni build -b stm32f407ig --project-dir examples\basic\template -t ram-report --json   # footprint.{rom,ram}
+```
+
+输出前 20 个符号 + 其余合计 + 未归入符号（栈/堆/对齐）；`-t footprint` 一次给两份，
+也可 `-t rom-report,ram-report`。实现直接读 ELF 符号表，
+AC6 `.axf` 与 GCC/CLANG `.elf` 同一套，不依赖 `nm` / `fromelf`；`-t` 的其它值原样透传给
+`cmake --build --target`。
 
 **服务路由**：命令组自动决定连哪个后端——`serial` / `net` 走 `bus`，其余走 `link`；
 任何叶子命令都能用 `--service link|bus` 覆盖。两个服务是**独立进程、独立登记表**
@@ -439,7 +477,7 @@ omni usb test run --file case.json --keep-going      # 默认失败即停
 
 | 命令 | 默认 HTTP 超时 | 行为 |
 |------|---------------|------|
-| `program` | 180 s | 擦→写→校验→复位运行；`--no-reset` 停在复位态 |
+| `program` | 180 s | 擦→写→校验→复位运行；`--no-reset` 停在复位态；`--erase sector`（默认，只擦镜像覆盖的扇区）/ `chip`（整片）；`--json` 返回 `erase_ms`/`program_ms`/`verify_ms` |
 | `erase` | 180 s | `--type chip`（默认）/ `sector --addr` / `sector_range --addr --size`；结束后 `reset_and_halt`（**停在 paused**） |
 | `verify` | 120 s | 只读；Flash 数据先 `reset_and_halt` 再读，**结束后目标停在 paused** |
 | `compare` | 180 s | 只读；按地址对齐比对，返回差异列表，不写目标；同样以 `reset_and_halt` 收尾 |
@@ -501,7 +539,8 @@ omni debug bp clear                                 # 会连 commander 设的断
 ### 6. 内存与外设
 
 ```powershell
-omni debug mem read --addr 0x20000000 --size 16 --json    # data_hex 小端，脚本自己换算
+omni debug mem read --addr 0x20000000 --size 16 --json    # data_hex 小端；默认阻塞读（0.41.0 起）
+omni debug mem read --addr 0x20000000 --size 16 --no-block  # 被占用就跳过（GUI 语义）
 omni debug periph list --json
 omni debug periph regs GPIOE --filter ODR --json          # values[].value = 64 → bit6
 omni debug periph nvic / scb / systick
@@ -616,6 +655,8 @@ try { ... } finally {
 | `bp clear` 把手工断点也删了 | 与 `commander exec break` 共用 pyOCD 断点管理器 | 只清自己的断点时用 `bp del --address/--file --line` |
 | `reset --mode break-symbol` 8 s 未命中 | 固件与 ELF 不匹配，或断点地址不执行 | 确认固件/ELF 一致，先用 `src line` 核对地址 |
 | 脚本断言 RTT 失败但人眼看得到 | 文本里有 ANSI 转义和 `\r\n` | 先剥 ANSI（`omni_cli.strip_ansi()`），正则容忍行尾 |
+| `probe connect` 报 `Target type ... not recognized` | `--target` 写了板名（如 `g32f463rc`），设备库/pyOCD 用 `x` 通配型号 | 改 `-t g32f463xc`（`omni device list --search 463` 确认） |
+| `probe connect` 报 `Unsupported device selected` | `--jlink-device` 不在 SEGGER 设备库（`G32F463RC` 就没有） | 用 `omni probe jlink-devices --search G32` 查到的 `G32F463xC`；名字大小写不敏感，但 `RC` 后缀不认 |
 | `probe connect` 报目标未支持 | 型号不在内置库，也没挂 Pack | `pack import` 持久导入，或 `--pack` 临时挂包 |
 | `device info` 查不到型号 | 设备库型号为小写 | 用 `g32f463xc` 这类小写写法 |
 | Keil/Ozone 连不上探针 | 后端占着 J-Link | `omni backend stop` |
@@ -642,6 +683,19 @@ try { ... } finally {
 | HID 打不开 / 读不到报告 | 被系统 HID 驱动独占；或设备本来就没有 IN 报告 | 关闭占用程序；IN 报告需要设备主动上报 |
 | CDC 打开失败 | COM 口被串口助手等工具占用 | 先关闭占用程序 |
 | 想发 WinUSB 等时传输 | WinUSB 不支持等时端点 | 只能抓包观察，或上硬件分析仪 |
+| `debug mem read` 返回 `skipped: true` 且 `data_hex` 为空 | 该命令走非侵入读取（try-acquire 探针锁），**RTT 抓取运行中约一半的读取会被跳过**（实测 6 次 3 次跳过）；0.39.1 之前还报成 `success: true` + 退出码 0 | 加 `--block`（0.40.0 起，阻塞等探针空闲，实测 6/6 成功）或先 `omni rtt stop`；也可用 `omni commander exec read32 <addr> <len>` |
+| `debug watch eval` 返回 `success: true` 但 `info: null` / `available: false` | 后端重启会丢 ELF 会话（符号只在 `elf load` 后存在）；目标在跑时也读不到值。0.39.1 之前两种情况都静默 | 0.40.0 起退出码 1 并提示 `debug elf load` / `debug halt`；脚本仍应断言 `info.available`，别只看 `success` |
+| `commander exec` 抛 `TypeError: unhashable type: 'list'` | 0.39.0 及更早：`commander exec <cmd...>` 的 `args.command` 是 list，被当 dict key 做服务路由 | 0.39.1 已修（list 取首元素）；旧版可改走 `commander shell --command "..."` |
+| `probe status --json` 输出 20+ KB | 含 `sectors[]` 全量扇区表（256 KB Flash = 256 项） | 加 `--no-sectors`（0.40.0 起，25 KB → 0.75 KB，保留 `sector_count`） |
+| `flash program` 报 `Target is not connected`，但 `probe status` 显示 connected | 探针被其它工具（JLink.exe/Keil）占用过后，后端记录的连接已失效；两处状态来源不同 | `probe disconnect <uid>` 再 `probe connect <uid> -t <part> -f 1000000`；错误信息本身不会提示这一步 |
+| `net ping` 全丢包但设备正常 | 目标被 `debug halt`/`probe connect`（默认 halt）停住了 | `omni debug run` 后重试；0.40.0 起 ping 全丢包会提示先看 `debug status` |
+| `debug status` 报 `Memory transfer fault @ 0xe000edf0`（DHCSR 读不出） | J-Link 在 1 MHz 下长时间 halt/run 反复操作后连接退化：同一会话里先能读，几次 halt 后开始 fault，随后 `flash`/`debug` 全失败 | `probe disconnect` + `probe connect -f 1000000` 通常恢复；反复出现就降到 `-f 500000`；仍不行 replug 探针。抓 RTT 期间尽量少 halt |
+| 设备与探针同时从系统里消失（`probe list` 为空、`usbipd` 里没有 C251） | 频繁复位/重枚举把 xHCI root hub 弄挂，或 hub 掉电 | 先 `pnputil /scan-devices`（需管理员）；不行就重插 USB 线/换口，必要时重启主机 |
+| `backend start` 打印"已启动"但随后 `backend status` 显示未运行 | 0.40.0 及更早只等握手行（打印在 bind 之前）；0.41.0 起会在握手后再确认 3 s 存活并附后端日志尾部报错 | 若仍失败，看 `.backend.log` 尾部的 bind/依赖错误；在 DSH 等作业对象里，CLI 拉起的后端会随命令结束被回收，改用常驻后台启动 |
+| 改 `omni/**/Kconfig` 后 `omni build` 仍用旧配置 | 0.46.0 之前没有把 Kconfig 挂进 `CMAKE_CONFIGURE_DEPENDS` | 0.46.0 起 `config generate` 会写 `kconfig_sources.txt`，构建目录自动重配；清单缺失（旧 CLI）会告警并退回遍历 |
+| `omni config sync-keil` 报「找到多个 .config」 | 不传 `-b` 时按 `--config-dir` → `boards/<b>/config` → `build/<b>/cbuild` → `build/<b>/<c>/<t>/config` → 工程根 查找，多块板都生成过就会命中多个 | 补 `-b/--board` 或 `--config-dir` 指定 |
+| menuconfig 改完下次 `config generate` 又变回去 | 0.44.0 之前只改 `.config`，configure 会重建它 | 0.44.0 起保存后把改动写进 `boards/<board>/board.conf` 的受管块；`--no-save` 才会丢 |
+| 重插后 `rtt start` 报"未检测到控制块"，PC 反复停在 `DAL_PCD_IRQHandler` | 固件镜像/复位状态异常（多次 `Memory transfer fault` 后出现），USB 中断里打转、应用没跑到 `SEGGER_RTT_Init()`；`flash reset` 不够 | 重新 `flash program` 一次即可恢复（实测 19.5 s，107744 B） |
 
 ## 打包脚本
 
@@ -705,6 +759,43 @@ omni debug periph regs GPIOE --filter ODR --json   # bit6 在 0x40/0x00 间跳�
 
 预期：首次 `mkfs: 0` / `mkdir: 0`；复位后无 `mkfs`、`mkdir: 8`（`FR_EXIST`）；
 `find` 在 `0x20001324` 命中 `hello fatfs\n`；`GPIOE->ODR` 的 bit6 在 `0x40`/`0x00` 之间跳变（LED 在跑）。
+
+## 实战配方：USB 网络类（RNDIS）例程（2026-11-19 实机）
+
+用 `examples/usb/usbd_cdc_rndis`（g32f463rc，HS）验证：**主机侧 echo 服务用 `net tcp-server`
+就够，不必再写 Python 脚本**；USB 侧用抓包核对描述符与 RNDIS 控制请求。
+
+```powershell
+omni probe connect <uid> -t g32f463xc -f 1000000
+omni flash program .\build\g32f463rc\AC6\Debug\omni.hex --uid <uid> --json
+omni usb list --vid 0xC251 --json            # 看 service(usbrndis6) 与所在 hub(USBPcapN)
+
+# 主机侧当 echo 服务器（替掉 script/echo_server.py）
+omni net tcp-server start --port 6000
+omni net tcp-server echo on
+omni net tcp-server status --json            # 客户端、rx/tx 字节
+omni net read --kind tcp-server --hex        # 设备发来的内容
+
+# 设备侧状态（halt 读，读完记得 run）
+omni debug elf load .\build\g32f463rc\AC6\Debug\omni.axf
+omni commander exec "read32 0x2000003C 4"    # link.link_up/speed：01020000 → up + HS
+omni rtt start ; omni rtt read --json        # 枚举/INITIALIZE/OID 全流程
+
+# 描述符核对：抓包 → 设备树
+omni usb capture transfers --vid 0xC251 --pid 0x0005 --type control --limit 8
+omni usb capture devices --json              # 2 接口 / 75 B / EF-04-01 / EP 0x82 int 8B
+```
+
+要点：
+
+- `usb capture devices --json` 的树（0.41.0 起）会显示 `IAD 接口关联`（接口范围/功能类/iFunction
+  字符串）与接口名、配置字符串——前提是抓包里真的出现了对应 STRING 描述符；Windows 会缓存
+  设备字符串，重枚举时可能不再请求，这时树里没有名字属正常，用 `usb desc parse --hex` 看索引。
+- RNDIS 控制请求会被解码成 `SEND_ENCAPSULATED_COMMAND` / `GET_ENCAPSULATED_RESPONSE`，
+  `classHint` 为 `rndis`，前提是接口类为 `0xEF/0x04`。
+- URL 型过滤（`--vid/--pid`）依赖抓包里出现过该设备的 `GET_DESCRIPTOR`；先 `capture start`
+  再复位/插拔一次才能命中。
+- 读设备内存前先 `omni rtt stop`（见陷阱表：RTT 抓取会让 `debug mem read` 被跳过）。
 
 ## 相关
 
