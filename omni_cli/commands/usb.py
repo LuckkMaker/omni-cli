@@ -36,7 +36,7 @@ from .serial import _parse_hex
 
 #: 失败码 → 可执行的下一步
 _HINTS = {
-    "not_elevated": "需要管理员权限：以管理员身份重新打开终端后重试。",
+    "not_elevated": "USBPcapCMD 拒绝访问：以管理员身份重新打开终端后重试。",
     "usbpcap_not_found": "未找到 USBPcapCMD.exe：安装 USBPcap 并重启，"
     "或用 --usbpcap-path 指定路径。",
     "capture_already_running": "已有捕获在运行：先执行 `omni usb capture stop`。",
@@ -322,7 +322,10 @@ def _environment_text(env: dict, bound: str | None = None, show_bound: bool = Fa
             "或用 --usbpcap-path 指定 USBPcapCMD.exe。"
         )
     elif not env.get("elevated"):
-        lines.append("下一步: 以管理员身份重新打开终端，再执行 capture start。")
+        lines.append(
+            "下一步: 直接执行 capture start（USBPcap 1.5.4 普通用户也能抓）；"
+            "若 USBPcapCMD 报 access denied，再以管理员身份重开终端。"
+        )
     elif not devices:
         lines.append("下一步: 确认 USBPcap 驱动已随安装程序写入（必要时重启）。")
     else:
