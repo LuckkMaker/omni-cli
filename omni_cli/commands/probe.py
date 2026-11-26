@@ -3,7 +3,7 @@
 import os
 import urllib.parse
 
-from ..client import ApiClient
+from ..client import ApiClient, ApiError
 from ..formatting import render_table
 from ..options import common_parser
 from ..runtime import finish, run_command
@@ -112,7 +112,21 @@ def _connect(c: ApiClient, args):
         "jlink_device": args.jlink_device,
         "pack": packs or None,
     }
-    data = c.post(f"/api/probes/{args.uid}/connect", payload)
+    try:
+        data = c.post(f"/api/probes/{args.uid}/connect", payload)
+    except ApiError as exc:
+        message = str(exc)
+        if "already open" in message.lower():
+            print(f"错误: {message}")
+            print("提示: 先查 pylink 的 PID 锁文件，再查占用进程。按顺序排查：")
+            print("  0) 最常见：pylink 的锁文件残留（记录着上次的 PID，被 Windows 复用给别的程序）：")
+            print("     del \"%TEMP%\\.pylink-usb-<serial>.lck\"    # 新版后端连前会自动清理")
+            print("  1) 找占用者（常见是 nrfutil-device / nRF Connect 后台、JLink.exe、Keil、Ozone）：")
+            print("     powershell -NoProfile -Command \"Get-Process | ? { $_.Modules.ModuleName -match 'JLink' } | select Id,Name\"")
+            print("  2) 结束占用进程后重试；仍报错就拔插 J-Link 的 USB 线（残留会话只能靠断电清除）。")
+            print("  3) 若只是本后端句柄失效：omni backend stop link && omni backend start link")
+            return 1
+        raise
     head = f"已连接 uid={args.uid}"
     if packs:
         head += "\n  临时 Pack: " + ", ".join(os.path.basename(p) for p in packs) + "（仅当前后端进程有效）"
