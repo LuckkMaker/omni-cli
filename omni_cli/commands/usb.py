@@ -13,8 +13,10 @@ import argparse
 import base64
 import json
 import shutil
+import struct
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -868,6 +870,76 @@ def _class_desc_label(item: dict) -> str:
     return f"类描述符 {item.get('type')}"
 
 
+_MSOS2_PLATFORM_UUID = bytes.fromhex("DF60DDD88945C74C9CD2659D9E648A9F")
+_BOS_CAPABILITY_NAMES = {
+    1: "Wireless",
+    2: "USB 2.0 Extension",
+    3: "SuperSpeed",
+    4: "Container ID",
+    5: "Platform",
+}
+
+
+def _capability_bytes(item: dict) -> bytes:
+    text = str(item.get("hex") or "").replace(" ", "")
+    try:
+        return bytes.fromhex(text)
+    except ValueError:
+        return b""
+
+
+def _bos_lines(bos: dict) -> list[str]:
+    """渲染 BOS；平台能力若是 MS OS 2.0 则解出 Windows 版本 / 描述符集长度 / vendor code"""
+    caps = bos.get("capabilities") or []
+    lines = [f"BOS: 总长 {bos.get('totalLength')}，{len(caps)} 个能力"]
+    for index, item in enumerate(caps, 1):
+        raw = _capability_bytes(item)
+        if len(raw) < 4:
+            lines.append(f"  能力 #{index}: hex {item.get('hex', '-')}")
+            continue
+        cap_type = raw[2]
+        name = _BOS_CAPABILITY_NAMES.get(cap_type, f"0x{cap_type:02X}")
+        lines.append(f"  能力 #{index}: {name} (0x{cap_type:02X})，{len(raw)} 字节")
+        if cap_type == 5 and len(raw) >= 20:
+            uuid_bytes = raw[4:20]
+            uuid_text = str(uuid.UUID(bytes_le=uuid_bytes))
+            lines.append(f"    平台 UUID {uuid_text}")
+            if uuid_bytes == _MSOS2_PLATFORM_UUID and len(raw) >= 28:
+                version, set_length = struct.unpack_from("<IH", raw, 20)
+                lines.append(
+                    f"    MS OS 2.0: Windows 版本 0x{version:08X}，"
+                    f"描述符集 {set_length} 字节，vendor code 0x{raw[26]:02X}，"
+                    f"alt enum 0x{raw[27]:02X}"
+                )
+    return lines
+
+
+def _msos20_lines(msos: dict) -> list[str]:
+    lines = [
+        f"MS OS 2.0 描述符集: 总长 {msos.get('totalLength')}，"
+        f"Windows 版本 {msos.get('windowsVersion')}"
+    ]
+    for item in msos.get("configSubsets") or []:
+        lines.append(
+            f"  配置子集: bConfigurationValue {item.get('bConfigurationValue')}，"
+            f"总长 {item.get('totalLength')}"
+        )
+    for item in msos.get("functionSubsets") or []:
+        lines.append(
+            f"  函数子集: bFirstInterface {item.get('bFirstInterface')}，"
+            f"子集长 {item.get('subsetLength')}"
+        )
+    for item in msos.get("compatibleIds") or []:
+        sub = item.get("subCompatibleId") or "-"
+        lines.append(f"  兼容 ID: {item.get('compatibleId')}（sub: {sub}）")
+    for item in msos.get("registryProperties") or []:
+        lines.append(f"  注册表属性: {item.get('name')} = {item.get('value')}")
+    for item in msos.get("unknown") or []:
+        sub_type = int(item.get("type", 0))
+        lines.append(f"  未识别子描述符 type 0x{sub_type:02X} hex {item.get('hex', '-')}")
+    return lines
+
+
 def _document_lines(doc: dict) -> list[str]:
     """把描述符文档渲染成人读的摘要（不展开原始 hex，hex 由 build/emit 给）。"""
     lines: list[str] = []
@@ -916,6 +988,9 @@ def _document_lines(doc: dict) -> list[str]:
                         f"    端点 {address} {direction} {kind} "
                         f"max {endpoint.get('maxPacketSize')} interval {endpoint.get('interval')}"
                     )
+    bos = doc.get("bos") or {}
+    if bos:
+        lines.extend(_bos_lines(bos))
     strings = doc.get("strings") or {}
     if strings:
         lines.append("字符串:")
@@ -962,6 +1037,8 @@ def _desc_parse(c: ApiClient, args):
     kind = data.get("kind")
     if kind == "setup":
         text = "\n".join(_setup_lines(data.get("setup") or {}, data.get("hex") or ""))
+    elif data.get("msos20"):
+        text = "\n".join(_msos20_lines(data["msos20"]))
     elif data.get("document"):
         text = "\n".join(_document_lines(data["document"]))
     elif kind == "string":
