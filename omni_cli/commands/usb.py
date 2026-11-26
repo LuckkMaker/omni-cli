@@ -56,7 +56,7 @@ _HINTS = {
     "winusb_invalid": "参数无效：检查 hex 数据与长度。",
 }
 
-_TRANSFER_HEADERS = ["ID", "时间", "设备", "端点", "Phase", "长度", "状态", "数据", "描述"]
+_TRANSFER_HEADERS = ["ID", "时间", "Δ", "设备", "端点", "Phase", "长度", "状态", "数据", "描述"]
 
 #: 数据列每行显示的字节数（8 字节 = 23 列，窗口过窄时降到 4）
 _DATA_BYTES_PER_LINE = 8
@@ -129,6 +129,21 @@ def _description(item: dict) -> str:
     return text
 
 
+def _delta_text(value) -> str:
+    """上一阶段结束到本阶段开始的空档；pcap 时间戳是 µs 精度，最小单位 1 µs。"""
+    if value is None:
+        return "-"
+    try:
+        micros = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    if micros < 1000:
+        return f"{micros}µs"
+    if micros < 1_000_000:
+        return f"{micros / 1000:.1f}ms"
+    return f"{micros / 1_000_000:.2f}s"
+
+
 def _transfer_rows(
     items: list[dict],
     data_bytes: int = 64,
@@ -149,10 +164,13 @@ def _transfer_rows(
             )
         direction = str(item.get("direction", "")).upper()
 
-        def base(phase, length, data_text):
+        delta = _delta_text(item.get("deltaUs"))
+
+        def base(phase, length, data_text, delta_text=""):
             row = [
                 item.get("id"),
                 _ts_text(item.get("ts")),
+                delta_text,
                 device,
                 endpoint,
                 phase,
@@ -165,10 +183,12 @@ def _transfer_rows(
             return row
 
         if show_setup and kind == 2 and item.get("setupHex"):
-            rows.append(base("CTL", 0, _setup_text(item, per_line) if data_bytes else ""))
+            rows.append(
+                base("CTL", 0, _setup_text(item, per_line) if data_bytes else "", delta)
+            )
             body = _data_text(item, data_bytes, per_line) if data_bytes else ""
             if body and body != "-":
-                row = ["", "", device, endpoint, direction or "IN",
+                row = ["", "", "", device, endpoint, direction or "IN",
                        item.get("length"), ""]
                 if data_bytes:
                     row.append(body)
@@ -180,7 +200,7 @@ def _transfer_rows(
         if kind == 2 and not item.get("length"):
             phase = "CTL"
         body = _data_text(item, data_bytes, per_line) if data_bytes else ""
-        rows.append(base(phase, item.get("length"), body))
+        rows.append(base(phase, item.get("length"), body, delta))
     return rows
 
 
@@ -197,6 +217,7 @@ _DATA_LINE_CHOICES = (16, 8, 4)
 _FOLLOW_MIN_WIDTHS = {
     "ID": 6,
     "时间": 12,
+    "Δ": 9,
     "设备": 5,
     "端点": 6,
     "Phase": 6,
@@ -473,13 +494,35 @@ def _capture_status(c: ApiClient, args):
     totals = data.get("totals") or {}
     mode = data.get("mode") or "-"
     running = "是" if data.get("running") else ("解析中" if data.get("loading") else "否")
+
+    # 长时间/大体积的捕获会一直占着 root hub 并把 temp 撑大（实测见过 2 天 / 133 MB），
+    # 这里把运行时长与文件大小直接摆出来，超过阈值再给一句提示。
+    path = data.get("capturePath")
+    size_bytes = None
+    if path:
+        try:
+            size_bytes = Path(path).stat().st_size
+        except OSError:
+            size_bytes = None
+    duration_text = "-"
+    started = data.get("startedAt")
+    if started and data.get("running"):
+        try:
+            began = datetime.fromisoformat(started)
+            seconds = max(0, int((datetime.now() - began).total_seconds()))
+            duration_text = f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+        except ValueError:
+            duration_text = "-"
+
     text = "\n".join(
         [
             f"运行中      : {running}",
             f"模式        : {mode}",
             f"设备        : {data.get('deviceId') or '-'}",
-            f"开始时间    : {data.get('startedAt') or '-'}",
-            f"抓包文件    : {data.get('capturePath') or '-'}",
+            f"开始时间    : {started or '-'}",
+            f"运行时长    : {duration_text}",
+            f"抓包文件    : {path or '-'}",
+            f"文件大小    : {f'{size_bytes / 1048576:.1f} MB' if size_bytes else '-'}",
             f"传输        : {totals.get('transfers', 0)}",
             f"字节        : {totals.get('bytes', 0)}",
             f"错误        : {totals.get('errors', 0)}",
@@ -487,6 +530,13 @@ def _capture_status(c: ApiClient, args):
             f"缓冲行      : {data.get('buffered', 0)} / {data.get('ringSize', 0)}",
         ]
     )
+    if data.get("running") and duration_text != "-":
+        seconds_total = int(duration_text.split("h")[0]) * 3600 + int(duration_text.split("h")[1][:2]) * 60
+        if seconds_total > 1800 or (size_bytes is not None and size_bytes > 100 * 1048576):
+            text += (
+                "\n提示        : 捕获已运行较久或文件较大，建议 `omni usb capture stop`，"
+                "然后清理 %TEMP%\\omni-bus\\captures 下的历史 pcap"
+            )
     if data.get("lastError"):
         text += f"\n最近错误    : {data['lastError']}"
     finish(args, data, text)
@@ -1681,11 +1731,20 @@ def _device_address(value: str) -> int:
             "这里是设备地址（如 7，表格里 1.7 的后一段），不是 root hub；"
             "root hub 在 capture start --device '\\\\.\\USBPcap1' 里选"
         )
+    # 表格里显示的是 "bus.addr"（如 2.30）；直接粘过来也认，取后一段
+    if "." in text:
+        _, _, addr_text = text.partition(".")
+        try:
+            return int(addr_text, 10)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"设备地址应形如 30 或 2.30，收到 {value!r}"
+            ) from None
     try:
         return int(text, 10)
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"设备地址应为整数（如 7），收到 {value!r}；表格里 1.7 的 7 就是它"
+            f"设备地址应为整数（如 7，也接受表格里的 2.7），收到 {value!r}"
         ) from None
 
 
