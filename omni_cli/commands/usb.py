@@ -873,7 +873,8 @@ def _class_desc_label(item: dict) -> str:
     return f"类描述符 {item.get('type')}"
 
 
-_MSOS2_PLATFORM_UUID = bytes.fromhex("DF60DDD88945C74C9CD2659D9E648A9F")
+#: MS OS 2.0 平台能力 UUID（DF60DDD8-8945-C74C-…）；描述符里按小端存放
+_MSOS2_PLATFORM_UUID = uuid.UUID("DF60DDD8-8945-C74C-9CD2-659D9E648A9F").bytes_le
 _BOS_CAPABILITY_NAMES = {
     1: "Wireless",
     2: "USB 2.0 Extension",

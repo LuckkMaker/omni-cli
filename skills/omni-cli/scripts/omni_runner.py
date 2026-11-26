@@ -1,4 +1,4 @@
-"""omni CLI 的轻量 Python 包装（适配 omni-cli 0.50.0）。
+"""omni CLI 的轻量 Python 包装（适配 omni-cli 0.51.0）。
 
 三个技能脚本共用：调用 `omni` 子命令、解析 `--json`、剥 ANSI。
 0.23.0 的 `--json` stdout 已是纯 JSON/JSONL，警告在响应的 `warning` 字段里；

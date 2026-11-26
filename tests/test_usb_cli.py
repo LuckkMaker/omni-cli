@@ -303,6 +303,56 @@ def main() -> int:
     )
     check("desc parse device", code == 0 and "0xC251" in out and "配置 1" in out, out)
 
+    bos_cap = (
+        "1C 10 05 00 D8 DD 60 DF 45 89 4C C7 9C D2 65 9D 9E 64 8A 9F "
+        "00 00 00 06 B2 00 01 00"
+    )
+    bos_doc = dict(
+        doc,
+        bos={
+            "totalLength": 33,
+            "capabilities": [{"hex": bos_cap}],
+        },
+    )
+    bos_item = {"success": True, "kind": "bos", "length": 33, "document": bos_doc}
+    code, out, _ = capture(
+        usb_cmd._desc_parse, StubClient({"/api/usb/desc/parse": bos_item}), ns(hex="0C 10")
+    )
+    check("desc parse BOS 能力列表", code == 0 and "BOS: 总长 33" in out, out)
+    check(
+        "desc parse BOS 解出 MS OS 2.0",
+        "平台 UUID df60ddd8-8945-c74c-9cd2-659d9e648a9f" in out
+        and "Windows 版本 0x06000000" in out
+        and "描述符集 178 字节" in out,
+        out,
+    )
+
+    msos_item = {
+        "success": True,
+        "kind": "msos20",
+        "msos20": {
+            "totalLength": 178,
+            "windowsVersion": "0x06000000",
+            "configSubsets": [{"bConfigurationValue": 1, "totalLength": 8}],
+            "functionSubsets": [{"bFirstInterface": 0, "subsetLength": 8}],
+            "compatibleIds": [{"compatibleId": "WINNCM", "subCompatibleId": ""}],
+            "registryProperties": [{"name": "DeviceInterfaceGUIDs", "value": "{GUID}"}],
+            "unknown": [],
+        },
+    }
+    code, out, _ = capture(
+        usb_cmd._desc_parse, StubClient({"/api/usb/desc/parse": msos_item}), ns(hex="0E 00 03")
+    )
+    check(
+        "desc parse MS OS 2.0 子集与兼容 ID",
+        code == 0
+        and "配置子集" in out
+        and "函数子集" in out
+        and "WINNCM" in out
+        and "DeviceInterfaceGUIDs" in out,
+        out,
+    )
+
     with tempfile.TemporaryDirectory() as tmp:
         doc_path = Path(tmp) / "doc.json"
         doc_path.write_text(json.dumps(doc), encoding="utf-8")

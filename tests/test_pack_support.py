@@ -428,6 +428,22 @@ def test_cli_handlers() -> None:
         check("pack 传绝对路径", payload.get("pack") == [os.path.abspath(pack_file)], str(payload))
         check("JSON 输出可解析", json.loads(buf.getvalue()).get("connected") is True)
 
+        from omni_cli.client import ApiError
+
+        class LockedClient(StubClient):
+            def post(self, path, payload=None):
+                raise ApiError(500, "J-Link is already open (device 852001270)")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = probe_cmd._connect(LockedClient(), args)
+        text = buf.getvalue()
+        check(
+            "J-Link 占用给出排查顺序",
+            rc == 1 and ".pylink-usb-" in text and "占用进程" in text and "拔插" in text,
+            text,
+        )
+
         stub = StubClient(post_result={"success": True, "target": None})
         args = SimpleNamespace(uid="uid1", part="g32f020k8", pack=[pack_file],
                                json_=True, quiet=False)

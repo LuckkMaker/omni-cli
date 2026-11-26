@@ -1,6 +1,6 @@
 ---
 name: "omni-cli"
-description: "用 omni CLI（omni-cli 0.50.0+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
+description: "用 omni CLI（omni-cli 0.51.0+）在真实硬件上联调：经本地 HTTP 后端连接探针、烧录/校验/对比/擦除 Flash、抓取 SEGGER RTT 日志、执行 pyOCD Commander 命令、采集 Monitor 变量波形，以及基于 ELF 的源码级调试（断点、寄存器、内存、外设、调用栈）。同时覆盖串口调试（收发/游标续读/后端录制/定时发送）、网络调试（TCP 服务器与客户端、UDP、ICMP ping、TFTP 传文件）和 USB 调试（USBPcap 抓包、描述符解析/校验/生成、CDC/HID/WinUSB 请求、离线 pcap 与真机回归用例），以及本地工程命令（config/build/boards/modules/toolchain）。适用于实机冒烟测试、串口/网络协议对读、RTT 日志断言、USB 枚举/描述符/请求排查、运行中目标的寄存器级排查，以及 flash→verify→RTT→断言 的可脚本化 CI 循环。"
 ---
 
 # OMNI CLI 实机联调
@@ -23,7 +23,7 @@ description: "用 omni CLI（omni-cli 0.50.0+）在真实硬件上联调：经�
 
 | 项 | 本机实测值 |
 |----|-----------|
-| CLI | `omni 0.50.0`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
+| CLI | `omni 0.51.0`（Python 包名 `omni_cli`，独立仓库 `D:\workspace\embedded\omni-cli`） |
 | 安装位置 | wheel：`powershell -File scripts\cli-package.ps1`（在 omni-cli 仓）；源码态用 `python -m omni_cli`（`PYTHONPATH` 指向 omni-cli 仓） |
 | 后端 | 独立仓库 `D:\workspace\embedded\omni-backend`，两个服务：`link`（探针/烧录/RTT/调试）与 `bus`（串口/网络/USB）；源码态 `link/server.py`、`bus/server.py` |
 | 后端接入 | 常驻 `omni backend start [link\|bus]` / `--managed`（临时拉起）/ `--backend-port`（接管已有） |
@@ -31,7 +31,7 @@ description: "用 omni CLI（omni-cli 0.50.0+）在真实硬件上联调：经�
 | 探针 | SEGGER J-Link Compact PLUS（UID `852001270`）；Geehy CMSIS-DAP（DAPLink，`VID_314B&PID_0101`） |
 | 目标 | STM32F407IG → `--target stm32f407xg` / `--jlink-device STM32F407IG`；G32F463RC → `--target g32f463xc` / `--jlink-device G32F463xC`；APM32F407 → `--target apm32f407xg` |
 | 固件 | `Objects\stm32f407\omni.hex` / `omni.axf`（Keil）或 `build\stm32f407ig\AC6\Debug\`（CMake） |
-| USB 抓包 | USBPcap 1.5.4+（默认 `D:\Program Files\USBPcap`）；`capture start` 需要**管理员终端** |
+| USB 抓包 | USBPcap 1.5.4+（默认 `D:\Program Files\USBPcap`）；`capture start` 先直接抓，USBPcapCMD 报 access denied 时再用**管理员终端** |
 | USB 设备 | `examples/usb/usbd_winusb`（C251:0002）、`usbd_hid_custom`（C251:0001）、`usbd_cdc_acm`（C251:0001→COMx） |
 
 ```powershell
@@ -318,8 +318,9 @@ omni usb capture save --out session.pcap
   自动降到 4 字节，超长部分标 `…`；
   `--data-bytes N` 控制显示字节数（默认 64，0=隐藏）。列表里的数据是后端预览（前 64 字节），
   完整内容用 `detail`；零长度传输显示 `-`。
-- **管理员是后端进程的属性**：权限检查在后端里，从普通终端启动的常驻后端即使客户端提权
-  也会报 `not_elevated`。必须由管理员终端执行 `omni backend start bus`。
+- **先直接抓，被拒再提权**：USBPcap 1.5.4 起普通用户可抓，`capture start` 先照常执行；
+  USBPcapCMD 报 access denied（后端 `not_elevated`）时再以管理员身份重开终端。权限检查在
+  后端进程里，客户端提权不会改变已常驻后端的权限，必要时从管理员终端重启 bus 后端。
 - 列表接口不返回 `dataHex` 的旧后端，数据列显示 `-` 并在 stderr 提示升级后端。
 - 总线状态：USBPcap 只抓 URB，**suspend/resume 不是 URB、抓不到**；reset 可看 hub 的
   `SET_FEATURE(PORT_RESET, port N)`，或 `URB` 行里的 `RESET_PIPE` /
@@ -348,6 +349,11 @@ omni usb desc build --file cdc.json                      # 生成分节 hex
 omni usb desc emit --file cdc.json --format hex
 omni usb desc from-capture --pcap enum.pcap              # 抓包 → 可编辑文档
 ```
+
+`desc parse` 的人读输出覆盖 BOS 与 MS OS 2.0：BOS 打印总长与能力列表，平台能力解出 UUID；
+MS OS 2.0 平台能力解出 Windows 版本、描述符集长度、vendor code 与 alt enum；`msos20`
+文档渲染配置子集、函数子集、兼容 ID（如 `WINNCM`）、注册表属性与未识别子描述符。
+完整原始字节用 `--json`（或 `desc build`/`emit`）取。
 
 ### 请求
 
@@ -663,6 +669,7 @@ try { ... } finally {
 | `probe connect` 报目标未支持 | 型号不在内置库，也没挂 Pack | `pack import` 持久导入，或 `--pack` 临时挂包 |
 | `device info` 查不到型号 | 设备库型号为小写 | 用 `g32f463xc` 这类小写写法 |
 | Keil/Ozone 连不上探针 | 后端占着 J-Link | `omni backend stop` |
+| `probe connect` 报 `J-Link is already open` | pylink 的 PID 锁文件残留（`%TEMP%\.pylink-usb-<serial>.lck`），或 nrfutil-device / JLink.exe / Keil / Ozone 占着探针 | 0.51.0 起命令直接打印排查：删锁文件 → 查占用进程 → 拔插 USB → `omni backend stop link && omni backend start link` |
 | 手工 `backend stop` 把 OMNI Link 桌面端的后端也停了 | `stop` 停的是当前记录的后端，不区分谁拉起 | 脚本只停自己启动的资源；手工执行前确认 GUI 没在用 |
 | `--managed` 下挂的临时 Pack 下一步就没了 | 命令结束即关停后端 | 多步操作先 `omni backend start` |
 | `omni config` 报“工程包含多个目标板” | 工程有多个 `boards/<target>` | 加 `-b/--board` |
@@ -677,9 +684,9 @@ try { ... } finally {
 | `omni.exe` 在仓库目录里报 `Could not create temporary directory!` | PyInstaller onefile 在工作区内的解包限制 | 拷到 `%TEMP%` 再运行；打包脚本已改为在 TEMP 里自检 |
 | `npm run package` 在中文系统解析 `.ps1` 失败 | PowerShell 5.1 读无 BOM 的 UTF-8 中文脚本 | 脚本已存为 UTF-8 with BOM |
 | 在技能 `scripts/` 目录里跑 `python -m omni_cli` 静默无输出 | 该目录曾有同名 `omni_cli.py`，遮蔽了真正的 CLI 包 | 辅助模块已改名 `omni_runner.py`；仍建议在别的目录执行 `-m omni_cli` |
-| `usb capture start` 报 `not_elevated` | 抓包驱动要求管理员 | 管理员终端重开；GUI 用“管理员重启” |
+| `usb capture start` 报 `not_elevated` | USBPcapCMD 拒绝访问（USBPcap 1.5.4 普通用户通常可抓，被拒才需要提权） | 先直接抓；报 access denied 后从管理员终端重启 bus 后端（GUI 用“管理员重启”） |
 | `usb capture start` 报 `device_busy` | 上次异常退出留下 USBPcapCMD 占用 root hub | 管理员任务管理器结束 `USBPcapCMD.exe`，或重启 |
-| 非管理员直接跑 `USBPcapCMD.exe` | 会启动提权 worker 并锁住 pcap，普通权限杀不掉 | 只通过 `omni usb capture`（管理员终端）调用 |
+| 非管理员直接跑 `USBPcapCMD.exe` | 会启动提权 worker 并锁住 pcap，普通权限杀不掉 | 只通过 `omni usb capture` 调用（报 access denied 时用管理员终端） |
 | `usb winusb list` 为空但设备管理器里有 | 接口未绑定 WinUSB，或固件 GUID 与命令不一致 | `usb winusb list --all` 看驱动服务；固件补 MS OS 2.0 描述符或用 INF |
 | `usb winusb open` 拒绝访问 | WinUSB 接口独占，被 Keil/厂商工具占着 | 关闭占用进程后重试 |
 | `winusb echo --pipeline 32` 超时 | `usbd_winusb` 单缓冲，发送端等不到 IN 完成 | 预期缺陷（正是回归信号）；换环形缓冲固件或修固件 |
@@ -712,7 +719,6 @@ try { ... } finally {
 | `scripts/omni_hw_smoke.py` | 一条命令跑完：后端→探针→（可选擦除）→烧录→校验→恢复运行→（可选 ELF）→RTT 抓取→正则断言→清理；失败返回非 0 |
 | `scripts/omni_rtt_assert.py` | 只做 RTT：stop→start 开新会话→采样→断言→可选落盘；适合反复验证运行中的固件 |
 | `scripts/omni_reg_watch.py` | 轮询一个寄存器/符号并按变化打印（`--symbol` 可自动解析 ELF 符号） |
-| `scripts/omni_cli.py` | 三个脚本共用的薄封装：调 `omni`、解析 `--json`、剥 ANSI、兼容旧版警告 |
 
 ```powershell
 # 完整冒烟 + 两条日志断言（--expect 可重复）

@@ -3,6 +3,17 @@
 > `omni` CLI 的完整版本历史（从 0.1.0 起），从 README 迁出。
 > 安装、命令参考与测试见 [README](../README.md)。
 
+## 0.51.0（2026-11-26）
+
+- `usb desc parse` 的人读输出补齐 BOS 与 MS OS 2.0：BOS 打印总长与能力列表，平台能力解出
+  UUID；MS OS 2.0 平台能力解出 Windows 版本、描述符集长度、vendor code 与 alt enum。
+  `msos20` 文档渲染配置子集、函数子集、兼容 ID（如 `WINNCM`）、注册表属性与未识别子描述符。
+- `probe connect` 遇到 `J-Link is already open` 时直接给出排查顺序：删
+  `%TEMP%\.pylink-usb-<serial>.lck` → 查占用进程（nrfutil-device / JLink.exe / Keil / Ozone）
+  → 拔插探针 → `omni backend stop link && omni backend start link`。
+- `usb doctor` 与 `usb capture` 的非管理员提示改为「先直接抓，USBPcapCMD 报 access denied
+  再提权」：USBPcap 1.5.4 起普通用户即可抓包，`not_elevated` 文案改为「USBPcapCMD 拒绝访问」。
+
 ## 0.50.0（2026-11-24）
 
 - `omni usb list` 使用 bus 后端 0.3.0+ 的 Windows hub IOCTL 地址，不启动 USBPcap 也能

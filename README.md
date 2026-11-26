@@ -32,7 +32,7 @@ omni (本包)
 
 ## 版本记录
 
-当前版本 **0.50.0**（`usb list` 无需抓包即可显示动态 USB 地址；build 支持 ROM/RAM 符号级报告）。完整历史见 [docs/changelog.md](docs/changelog.md)。
+当前版本 **0.51.0**（`usb desc parse` 人读 BOS 与 MS OS 2.0 描述符；`probe connect` 给出 J-Link 占用排查）。完整历史见 [docs/changelog.md](docs/changelog.md)。
 
 ## 安装
 
@@ -342,9 +342,9 @@ omni net tcp-client auto-send stop        # 返回发送/失败计数
 | 子命令 | 说明 |
 | --- | --- |
 | `list` | 列出 VID:PID、描述、驱动、所属 USBPcap hub 与动态 USB 地址；`--all` 按 hub 显示树形视图，`--json` 用 `captureAddresses` 数组返回地址 |
-| `capture start/stop/status` | 启停 USBPcap 实时抓包并查看统计；开始抓包需要管理员权限 |
+| `capture start/stop/status` | 启停 USBPcap 实时抓包并查看统计；USBPcap 1.5.4 起普通用户可直接抓，USBPcapCMD 报 access denied 时再提权 |
 | `capture transfers/detail/devices` | 跟踪传输、查看单条详情、查看抓包重建的描述符设备树 |
-| `desc` / `winusb` / `hid` / `cdc` / `test` | 解析与生成描述符、通过对应驱动收发、运行 USB 回归用例 |
+| `desc` / `winusb` / `hid` / `cdc` / `test` | 解析与生成描述符（BOS / MS OS 2.0 含人读摘要）、通过对应驱动收发、运行 USB 回归用例 |
 
 「USB 地址」采用 `bus.device` 格式，例如 `2.47`。bus 后端 0.3.0+ 直接读取 Windows hub，
 不需要启动抓包；查询失败或使用旧后端时，CLI 回退到正在运行的实时抓包描述符映射。
